@@ -18,6 +18,7 @@
     "client.MixinPlayerTabOverlay",
     "client.OptionInstanceAccessor",
     "client.PlayerTabOverlayAccessor",
+    "entity.ColorParticleOptionAccessor",
     "entity.EntityRotationAccessor",
     "entity.FireworkRocketEntityAccessor",
     "entity.LivingEntityEffectParticlesAccessor",

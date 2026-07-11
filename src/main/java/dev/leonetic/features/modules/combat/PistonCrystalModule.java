@@ -8,6 +8,7 @@ import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.modules.client.TargetsModule;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.RotationRequest;
+import dev.leonetic.util.DamageSyncTracker;
 import dev.leonetic.util.MathUtil;
 import dev.leonetic.util.PlaceUtil;
 import dev.leonetic.util.inventory.InventoryUtil;
@@ -54,6 +55,8 @@ public class PistonCrystalModule extends Module {
     private final Setting<Integer> delay        = num("Delay",       10, 0, 20).setPage("General");
     private final Setting<Boolean> offhandPlace = bool("OffhandPlace", true).setPage("General");
     private final Setting<Boolean> autoBase     = bool("AutoBase",   true).setPage("General");
+
+    private final Setting<Boolean> damageSync   = bool("DamageSync", false).setPage("General");
 
     private final Setting<Boolean> render      = bool("Render",      true).setPage("Render");
     private final Setting<Float>   fadeTime    = num("FadeTime",     0.2f, 0.05f, 2.0f).setPage("Render");
@@ -254,6 +257,7 @@ public class PistonCrystalModule extends Module {
     private Setup findSetup(int pistonSlot, int redstoneSlot, int crystalSlot) {
         LivingEntity target = findTarget();
         if (target == null) { lastDamage = 0; return null; }
+        if (damageSync.getValue() && DamageSyncTracker.shouldHold(target)) { lastDamage = 0; return null; }
 
         targetProfile    = profileOf(target);
         targetDifficulty = mc.level.getDifficulty();

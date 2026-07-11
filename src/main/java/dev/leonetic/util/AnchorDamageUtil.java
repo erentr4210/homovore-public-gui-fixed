@@ -30,7 +30,7 @@ public final class AnchorDamageUtil implements Util {
         throw new AssertionError();
     }
 
-    public record Target(Vec3 pos, AABB box, float armor, float toughness,
+    public record Target(LivingEntity entity, Vec3 pos, AABB box, float armor, float toughness,
                          float resistMult, int protPoints) {
 
         public static Target of(LivingEntity living) {
@@ -51,7 +51,7 @@ public final class AnchorDamageUtil implements Util {
             float resistMult = resistance != null
                     ? Math.max(0f, 1.0f - 0.2f * (resistance.getAmplifier() + 1)) : 1.0f;
 
-            return new Target(living.position(), living.getBoundingBox(),
+            return new Target(living, living.position(), living.getBoundingBox(),
                     armor, toughness, resistMult, protPoints);
         }
     }

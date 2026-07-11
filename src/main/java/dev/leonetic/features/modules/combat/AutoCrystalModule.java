@@ -12,6 +12,7 @@ import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.PlacementManager;
 import dev.leonetic.manager.RotationRequest;
 import dev.leonetic.manager.SwapManager;
+import dev.leonetic.util.DamageSyncTracker;
 import dev.leonetic.util.MathUtil;
 import dev.leonetic.util.PlaceUtil;
 import dev.leonetic.util.render.RenderUtil;
@@ -78,6 +79,8 @@ public class AutoCrystalModule extends Module {
     private final Setting<Double>  maxSelfDamage = num("MaxSelfDamage", 4.0, 0.0, 36.0).setPage("General");
     private final Setting<Boolean> antiSurround  = bool("AntiSurround", true).setPage("General");
     private final Setting<Integer> antiSurroundCompletion = num("AntiSurroundCompletion", 70, 0, 100).setPage("General");
+
+    private final Setting<Boolean> damageSync    = bool("DamageSync", false).setPage("General");
 
     private final Setting<Boolean> antiChinese   = bool("AntiChinese", false).setPage("AntiChinese");
 
@@ -693,6 +696,7 @@ public class AutoCrystalModule extends Module {
             boolean anyTarget = false;
             for (TargetCache tc : potentialTargets) {
                 if (tc.pos.distanceToSqr(cp) > 144.0) continue;
+                if (damageSync.getValue() && DamageSyncTracker.shouldHold(tc.entity)) continue;
                 float dmg = calcDamage(tc, cp);
                 if (dmg < getDynamicMin(tc.hp, tc.abs, tc.armorBroken)) continue;
                 totalDmg += dmg;
@@ -997,7 +1001,7 @@ public class AutoCrystalModule extends Module {
             if (!living.getItemBySlot(EquipmentSlot.LEGS).isEmpty())  protPoints += 8;
             if (!living.getItemBySlot(EquipmentSlot.FEET).isEmpty())  protPoints += 4;
 
-            out.add(new TargetCache(living.position(), living.getBoundingBox(),
+            out.add(new TargetCache(living, living.position(), living.getBoundingBox(),
                     living.getHealth(), living.getAbsorptionAmount(), armorBroken,
                     armor, toughness, protPoints));
         }
@@ -1027,7 +1031,7 @@ public class AutoCrystalModule extends Module {
         return dx * dx + dy * dy + dz * dz;
     }
 
-    private record TargetCache(Vec3 pos, AABB box, float hp, float abs,
+    private record TargetCache(LivingEntity entity, Vec3 pos, AABB box, float hp, float abs,
                                boolean armorBroken, float armor, float toughness,
                                int protPoints) {}
 

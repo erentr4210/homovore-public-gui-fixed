@@ -153,7 +153,7 @@ public class LogoutSpotsModule extends Module {
             String timeStr = showTime.getValue() ? " " + formatElapsed(spot.logoutTime) : "";
             nametags.renderNametag(graphics, spot.pos.x, tagY, spot.pos.z, dist,
                     spot.name, nameColor.getValue().getRGB(), timeStr,
-                    spot.totemPops, spot.armor, spot.mainHand, spot.offHand);
+                    spot.totemPops, spot.armor, spot.mainHand, spot.offHand, null);
         }
     }
 

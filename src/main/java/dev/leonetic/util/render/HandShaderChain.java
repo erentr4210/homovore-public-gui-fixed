@@ -20,9 +20,11 @@ public final class HandShaderChain {
     private static final Identifier DILATE_H_FSH      = Identifier.fromNamespaceAndPath("homovore", "post/hand_outline_h");
     private static final Identifier OUTLINE_FSH       = Identifier.fromNamespaceAndPath("homovore", "post/hand_outline");
     private static final Identifier GLOW_H_FSH        = Identifier.fromNamespaceAndPath("homovore", "post/hand_glow_h");
+    private static final Identifier GLOW_V_FSH        = Identifier.fromNamespaceAndPath("homovore", "post/hand_glow_v");
     private static final Identifier OUTLINE_GLOW_FSH  = Identifier.fromNamespaceAndPath("homovore", "post/hand_outline_glow");
     private static final Identifier DILATED           = Identifier.fromNamespaceAndPath("homovore", "hand_dilated");
     private static final Identifier GLOW_H            = Identifier.fromNamespaceAndPath("homovore", "hand_glow_h");
+    private static final Identifier GLOW_V            = Identifier.fromNamespaceAndPath("homovore", "hand_glow_v");
     private static final Identifier CHAIN_NAME        = Identifier.fromNamespaceAndPath("homovore", "hand_shader_runtime");
     private static final UniformWriter UNIFORM_WRITER = new UniformWriter();
 
@@ -34,6 +36,8 @@ public final class HandShaderChain {
     private static boolean lastFill        = false;
     private static int   lastGlowRadius    = Integer.MIN_VALUE;
     private static float lastGlowIntensity = Float.NaN;
+    private static int   lastWidth         = -1;
+    private static int   lastHeight        = -1;
 
     private HandShaderChain() {}
 
@@ -43,11 +47,16 @@ public final class HandShaderChain {
         int glowR = glow ? Math.max(0, glowRadius) : 0;
         if (lineWidth == 0 && !fill && glowR == 0) return null;
 
-        if (cached != null && lineWidth == lastLineWidth && fill == lastFill
+        var mainTarget = Minecraft.getInstance().getMainRenderTarget();
+        int width  = mainTarget.width;
+        int height = mainTarget.height;
+        boolean sizeChanged = width != lastWidth || height != lastHeight;
+
+        if (!sizeChanged && cached != null && lineWidth == lastLineWidth && fill == lastFill
                 && glowR == lastGlowRadius && glowIntensity == lastGlowIntensity) {
             return cached;
         }
-        else if (cached != null && lastGlowRadius == glowR) // if glow was just toggled we need to recreate the postchain.
+        else if (!sizeChanged && cached != null && lastGlowRadius == glowR)
         {
             lastLineWidth = lineWidth;
             lastFill = fill;
@@ -81,7 +90,7 @@ public final class HandShaderChain {
             return cached;
         }
 
-        PostChain rebuilt = build(lineWidth, fill, glowR, glowIntensity);
+        PostChain rebuilt = build(lineWidth, fill, glowR, glowIntensity, width, height);
         if (rebuilt == null) return cached;
         if (cached != null) cached.close();
         cached = rebuilt;
@@ -89,10 +98,13 @@ public final class HandShaderChain {
         lastFill = fill;
         lastGlowRadius = glowR;
         lastGlowIntensity = glowIntensity;
+        lastWidth = width;
+        lastHeight = height;
         return cached;
     }
 
-    private static PostChain build(int lineWidth, boolean fill, int glowRadius, float glowIntensity) {
+    private static PostChain build(int lineWidth, boolean fill, int glowRadius, float glowIntensity,
+                                   int width, int height) {
         try {
             if (projection == null) {
                 projection = new CachedOrthoProjectionMatrixBuffer("homovore_hand", 0.1f, 1000.0f, false);
@@ -107,7 +119,7 @@ public final class HandShaderChain {
                     Map.of("DilateConfig", List.<UniformValue>of(integer(lineWidth))));
 
             PostChainConfig config = glowRadius > 0
-                    ? buildGlow(dilateH, fillA, lineWidth, glowRadius, glowIntensity)
+                    ? buildGlow(dilateH, fillA, lineWidth, glowRadius, glowIntensity, width, height)
                     : buildPlain(dilateH, fillA, lineWidth);
 
             return PostChain.load(config, Minecraft.getInstance().getTextureManager(),
@@ -137,13 +149,25 @@ public final class HandShaderChain {
     }
 
     private static PostChainConfig buildGlow(PostChainConfig.Pass dilateH, float fillA,
-                                             int lineWidth, int glowRadius, float glowIntensity) {
+                                             int lineWidth, int glowRadius, float glowIntensity,
+                                             int width, int height) {
+
+        int hw = Math.max(1, width  / 2);
+        int hh = Math.max(1, height / 2);
+
+        List<UniformValue> glowConfig = List.of(integer(glowRadius));
 
         PostChainConfig.Pass glowH = new PostChainConfig.Pass(
                 SCREENQUAD, GLOW_H_FSH,
-                List.of(new PostChainConfig.TargetInput("In", PostChain.MAIN_TARGET_ID, false, false)),
+                List.of(new PostChainConfig.TargetInput("In", PostChain.MAIN_TARGET_ID, false, true)),
                 GLOW_H,
-                Map.of("GlowConfig", List.<UniformValue>of(integer(glowRadius))));
+                Map.of("GlowConfig", glowConfig));
+
+        PostChainConfig.Pass glowV = new PostChainConfig.Pass(
+                SCREENQUAD, GLOW_V_FSH,
+                List.of(new PostChainConfig.TargetInput("In", GLOW_H, false, true)),
+                GLOW_V,
+                Map.of("GlowConfig", glowConfig));
 
         List<UniformValue> outlineConfig = List.of(
                 flt(fillA),
@@ -152,18 +176,20 @@ public final class HandShaderChain {
                 integer(lineWidth),
                 integer(glowRadius)
         );
+
         PostChainConfig.Pass outline = new PostChainConfig.Pass(
                 SCREENQUAD, OUTLINE_GLOW_FSH,
                 List.of(new PostChainConfig.TargetInput("In", DILATED, false, false),
-                        new PostChainConfig.TargetInput("Glow", GLOW_H, false, false),
+                        new PostChainConfig.TargetInput("Glow", GLOW_V, false, true),
                         new PostChainConfig.TargetInput("Orig", PostChain.MAIN_TARGET_ID, false, false)),
                 PostChain.MAIN_TARGET_ID,
                 Map.of("OutlineConfig", outlineConfig));
 
         return new PostChainConfig(
                 Map.of(DILATED, new PostChainConfig.InternalTarget(Optional.empty(), Optional.empty(), false, 0),
-                       GLOW_H,  new PostChainConfig.InternalTarget(Optional.empty(), Optional.empty(), false, 0)),
-                List.of(dilateH, glowH, outline));
+                       GLOW_H,  new PostChainConfig.InternalTarget(Optional.of(hw), Optional.of(hh), false, 0),
+                       GLOW_V,  new PostChainConfig.InternalTarget(Optional.of(hw), Optional.of(hh), false, 0)),
+                List.of(dilateH, glowH, glowV, outline));
     }
 
     private static UniformValue flt(float v) {

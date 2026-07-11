@@ -6,14 +6,19 @@ import dev.leonetic.Homovore;
 import dev.leonetic.event.impl.render.Render2DEvent;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
+import dev.leonetic.util.DamageSyncTracker;
 import dev.leonetic.util.render.MatrixCapture;
 import dev.leonetic.util.traits.Jsonable;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.item.alchemy.PotionContents;
+import net.minecraft.world.item.alchemy.Potions;
 
 import java.awt.*;
 import java.util.ArrayList;
@@ -31,6 +36,7 @@ public class NametagsModule extends Module {
     public Setting<Boolean> showArmor   = bool("ShowArmor",   true).setPage("Info");
     public Setting<Boolean> showDist    = bool("ShowDist",    true).setPage("Info");
     public Setting<Boolean> showPops    = bool("ShowPops",    true).setPage("Info");
+    public Setting<Boolean> showResistance = bool("ShowResistance", true).setPage("Info");
 
     public Setting<Color>   nameColor   = color("NameColor",   255, 255, 255, 255).setPage("Colors");
     public Setting<Color>   friendColor = color("FriendColor",   0, 255, 100, 255).setPage("Colors");
@@ -93,6 +99,16 @@ public class NametagsModule extends Module {
         EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET
     };
 
+    private static final ItemStack TURTLE_MASTER_ICON = makeTurtleMasterIcon();
+
+    private static final ItemStack GAPPLE_ICON = new ItemStack(Items.ENCHANTED_GOLDEN_APPLE);
+
+    private static ItemStack makeTurtleMasterIcon() {
+        ItemStack stack = new ItemStack(Items.SPLASH_POTION);
+        stack.set(DataComponents.POTION_CONTENTS, new PotionContents(Potions.TURTLE_MASTER));
+        return stack;
+    }
+
     public NametagsModule() {
         super("Nametags", "Renders custom nametags above players", Category.RENDER);
         Homovore.configManager.addConfig(pearlCacheJson);
@@ -134,11 +150,17 @@ public class NametagsModule extends Module {
             ItemStack mainHand = Homovore.playerInfoManager.getMainHandItem(player);
             ItemStack offHand  = Homovore.playerInfoManager.getOffHandItem(player);
             String name = player.getGameProfile().name();
+            ItemStack resistanceIcon = null;
+            if (showResistance.getValue()) {
+                if (DamageSyncTracker.isTurtleMaster(player)) resistanceIcon = TURTLE_MASTER_ICON;
+                else if (DamageSyncTracker.hasResistance(player)) resistanceIcon = GAPPLE_ICON;
+            }
+            ItemStack resIcon = resistanceIcon;
 
             jobs.add(new RenderJob(dist * dist, () ->
                     renderNametag(graphics, px, py, pz, dist,
                             name, nameArgb, secondaryStr, pops,
-                            armor, mainHand, offHand)));
+                            armor, mainHand, offHand, resIcon)));
         }
 
         if (showPearls.getValue()) {
@@ -219,7 +241,8 @@ public class NametagsModule extends Module {
                                String secondaryStr,
                                int totemPops,
                                Map<EquipmentSlot, ItemStack> armor,
-                               ItemStack mainHand, ItemStack offHand) {
+                               ItemStack mainHand, ItemStack offHand,
+                               ItemStack resistanceIcon) {
         float[] screen = MatrixCapture.worldToScreen(wx, wy, wz);
         if (screen == null) return;
 
@@ -234,10 +257,17 @@ public class NametagsModule extends Module {
         String popsStr = (showPops.getValue() && totemPops > 0) ? " -" + totemPops : "";
         int popsW = mc.font.width(popsStr);
 
-        int totalW   = nameW + secondaryW + popsW;
-        int halfW    = totalW / 2;
         int textH    = mc.font.lineHeight;
         int textTopY = -textH;
+
+        boolean hasIcon = resistanceIcon != null;
+        int iconSize = hasIcon ? textH : 0;
+        int iconGap  = hasIcon ? 1 : 0;
+        int leadW    = iconSize + iconGap;
+
+        int totalW   = leadW + nameW + secondaryW + popsW;
+        int halfW    = totalW / 2;
+        int nameX    = -halfW + leadW;
 
         graphics.pose().pushMatrix();
         graphics.pose().translate(anchorX, anchorY);
@@ -245,12 +275,22 @@ public class NametagsModule extends Module {
 
         graphics.fill(-halfW - 2, textTopY - 1, halfW + 2, 1, bgColor.getValue().getRGB());
 
-        graphics.drawString(mc.font, name, -halfW, textTopY, nameArgb);
+        if (hasIcon) {
+            float itemScale = iconSize / 16.0f;
+            int iconY = textTopY + (textH - iconSize) / 2;
+            graphics.pose().pushMatrix();
+            graphics.pose().translate(-halfW, iconY);
+            graphics.pose().scale(itemScale, itemScale);
+            graphics.renderItem(resistanceIcon, 0, 0);
+            graphics.pose().popMatrix();
+        }
+
+        graphics.drawString(mc.font, name, nameX, textTopY, nameArgb);
         if (!secondaryStr.isEmpty()) {
-            graphics.drawString(mc.font, secondaryStr, -halfW + nameW, textTopY, distColor.getValue().getRGB());
+            graphics.drawString(mc.font, secondaryStr, nameX + nameW, textTopY, distColor.getValue().getRGB());
         }
         if (!popsStr.isEmpty()) {
-            graphics.drawString(mc.font, popsStr, -halfW + nameW + secondaryW, textTopY, popColor.getValue().getRGB());
+            graphics.drawString(mc.font, popsStr, nameX + nameW + secondaryW, textTopY, popColor.getValue().getRGB());
         }
 
         if (showArmor.getValue()) {

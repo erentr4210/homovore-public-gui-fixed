@@ -10,6 +10,7 @@ import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.RotationRequest;
 import dev.leonetic.mixin.client.ClientLevelAccessor;
 import dev.leonetic.util.AnchorDamageUtil;
+import dev.leonetic.util.DamageSyncTracker;
 import dev.leonetic.util.MathUtil;
 import dev.leonetic.util.PlaceUtil;
 import dev.leonetic.util.inventory.InventoryUtil;
@@ -46,6 +47,8 @@ public class AutoAnchorModule extends Module {
     private final Setting<Double>  maxSelfDamage = num("MaxSelfDamage", 4.0, 0.0, 36.0).setPage("General");
     private static final double PLACE_RANGE = 6.0;
     private final Setting<Integer> delay         = num("Delay", 2, 0, 20).setPage("General");
+
+    private final Setting<Boolean> damageSync    = bool("DamageSync", false).setPage("General");
     private final Setting<Boolean> render        = bool("Render", true).setPage("Render");
     private final Setting<Float>   fadeTime      = num("FadeTime", 1.0f, 0.05f, 2.0f).setPage("Render");
     private final Setting<Color>   fillColor     = color("FillColor", 130, 80, 255, 45).setPage("Render");
@@ -240,6 +243,7 @@ public class AutoAnchorModule extends Module {
                     for (int i = 0, n = targets.size(); i < n; i++) {
                         AnchorDamageUtil.Target target = targets.get(i);
                         if (target.pos().distanceTo(center) > AnchorDamageUtil.DIAMETER) continue;
+                        if (damageSync.getValue() && DamageSyncTracker.shouldHold(target.entity())) continue;
                         float dmg = AnchorDamageUtil.damage(target, center, pos);
                         if (dmg <= 0f) continue;
                         total += dmg;

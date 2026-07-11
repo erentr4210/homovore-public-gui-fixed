@@ -3,13 +3,21 @@ package dev.leonetic.mixin.client;
 import dev.leonetic.features.modules.render.ShulkerPreviewModule;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
+import net.minecraft.world.Container;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.BannerItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.MapItem;
+
+import java.util.ArrayList;
+import java.util.List;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -28,6 +36,9 @@ public class MixinAbstractContainerScreen<T extends AbstractContainerMenu> {
     @Shadow
     protected Slot hoveredSlot;
 
+    @Shadow
+    protected int leftPos;
+
     @Inject(method = "renderTooltip", at = @At("HEAD"), cancellable = true)
     private void onRenderShulkerPreview(GuiGraphics graphics, int mouseX, int mouseY, CallbackInfo ci) {
         ShulkerPreviewModule module = ShulkerPreviewModule.get();
@@ -38,6 +49,41 @@ public class MixinAbstractContainerScreen<T extends AbstractContainerMenu> {
         if (module.renderPreview(graphics, hoveredSlot.getItem(), mouseX, mouseY)) {
             ci.cancel();
         }
+    }
+
+    @Inject(method = "renderContents", at = @At("TAIL"))
+    private void onRenderShulkerList(GuiGraphics graphics, int mouseX, int mouseY, float partial, CallbackInfo ci) {
+        ShulkerPreviewModule module = ShulkerPreviewModule.get();
+        if (module == null || !module.isEnabled() || !module.shulkerList.getValue()) return;
+        if (!isEnderChestScreen()) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        Container playerInv = mc.player != null ? mc.player.getInventory() : null;
+
+        List<ItemStack> shulkers = new ArrayList<>();
+        for (Slot slot : menu.slots) {
+            if (playerInv != null && slot.container == playerInv) continue;
+            ItemStack stack = slot.getItem();
+            if (ShulkerPreviewModule.isShulkerBox(stack) && stack.has(DataComponents.CONTAINER)) {
+                shulkers.add(stack);
+            }
+        }
+        module.renderShulkerList(graphics, shulkers, leftPos);
+    }
+
+    private boolean isEnderChestScreen() {
+        Component title = ((Screen) (Object) this).getTitle();
+        return title != null
+                && title.getContents() instanceof TranslatableContents contents
+                && contents.getKey().equals("container.enderchest");
+    }
+
+    @Inject(method = "renderSlot", at = @At("TAIL"))
+    private void onRenderShulkerThumbnail(GuiGraphics graphics, Slot slot, int mouseX, int mouseY, CallbackInfo ci) {
+        ShulkerPreviewModule module = ShulkerPreviewModule.get();
+        if (module == null || !module.isEnabled()) return;
+        if (slot == null || !slot.hasItem()) return;
+        module.renderThumbnail(graphics, slot.getItem(), slot.x, slot.y);
     }
 
     @Inject(method = "mouseDragged", at = @At("HEAD"), cancellable = true)

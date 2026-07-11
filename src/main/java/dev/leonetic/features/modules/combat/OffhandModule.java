@@ -90,7 +90,13 @@ public class OffhandModule extends Module {
         if (managingGapple) {
             boolean mainhandIsGapple = mc.player.getMainHandItem().is(Items.ENCHANTED_GOLDEN_APPLE);
 
-            if (rmb && mainhandIsGapple) return;
+            if (rmb && mainhandIsGapple) {
+
+                if (!mc.player.isUsingItem()) {
+                    mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+                }
+                return;
+            }
 
             if (isEatingGapple() || eatingGappleLatch) return;
 
