@@ -52,17 +52,27 @@ void main() {
     }
 
     if (GlowRadius > 0) {
-        // Glow is fully blurred in the half-res GLOW_V target; a single bilinear
-        // fetch upsamples it. .rgb is premultiplied colour, .a is coverage.
-        vec4 g = texture(GlowSampler, texCoord);
-        float coverage = g.a;
-        if (coverage > 0.0001) {
-            vec3 col = g.rgb / coverage;
-            float glow = clamp(pow(GlowIntensity * coverage, 0.72) * 1.35, 0.0, 1.0);
-            if (glow > 0.0) {
-                fragColor = vec4(col, glow);
-                return;
+        float invSpan = 1.0 / float(GlowRadius + 1);
+        float acc = 0.0;
+        float wSum = 0.0;
+        float maxG = 0.0;
+        vec3 col = vec3(0.0);
+        for (int y = -GlowRadius; y <= GlowRadius; y++) {
+            vec4 s = texture(GlowSampler, texCoord + texel * vec2(0.0, float(y)));
+            float t = 1.0 - float(y) * invSpan * float(y) * invSpan;
+            float w = t * t;
+            acc  += w * s.a;
+            wSum += w;
+            if (s.a > maxG) {
+                maxG = s.a;
+                col = s.rgb;
             }
+        }
+        float coverage = acc / wSum;
+        float glow = clamp(pow(GlowIntensity * coverage, 0.72) * 1.35, 0.0, 1.0);
+        if (glow > 0.0) {
+            fragColor = vec4(col, glow);
+            return;
         }
     }
 

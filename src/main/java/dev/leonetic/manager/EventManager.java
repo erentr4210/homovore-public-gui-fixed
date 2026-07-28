@@ -12,7 +12,6 @@ import dev.leonetic.event.impl.render.Render2DEvent;
 import dev.leonetic.event.impl.render.Render3DEvent;
 import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.Feature;
-import dev.leonetic.features.modules.client.ClickGuiModule;
 import net.minecraft.world.entity.player.Player;
 
 public class EventManager extends Feature {
@@ -61,12 +60,7 @@ public class EventManager extends Feature {
     @Subscribe
     public void onKeyInput(KeyInputEvent event) {
         if (event.getAction() == 1) {
-            if (mc.screen == null && ClickGuiModule.matchesKey(event.getKey())) {
-                ClickGuiModule.syncModuleBind();
-                ClickGuiModule.getInstance().toggle();
-            } else {
-                Homovore.moduleManager.onKeyPressed(event.getKey());
-            }
+            Homovore.moduleManager.onKeyPressed(event.getKey());
         } else if (event.getAction() == 0) {
             Homovore.moduleManager.onKeyReleased(event.getKey());
         }

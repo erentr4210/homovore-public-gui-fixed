@@ -18,6 +18,8 @@ public final class DamageSyncTracker {
 
     private static final int SLOWNESS_COLOR = MobEffects.SLOWNESS.value().getColor() & 0xFFFFFF;
 
+    private static final int STRENGTH_COLOR = MobEffects.STRENGTH.value().getColor() & 0xFFFFFF;
+
     private static final int FULL_HIT_THRESHOLD = 10;
 
     private static boolean hasEffectColor(LivingEntity entity, int rgb) {
@@ -39,6 +41,10 @@ public final class DamageSyncTracker {
 
     public static boolean hasSlowness(LivingEntity entity) {
         return hasEffectColor(entity, SLOWNESS_COLOR);
+    }
+
+    public static boolean hasStrength(LivingEntity entity) {
+        return hasEffectColor(entity, STRENGTH_COLOR);
     }
 
     public static boolean isTurtleMaster(LivingEntity entity) {

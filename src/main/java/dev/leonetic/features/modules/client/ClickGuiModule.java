@@ -1,6 +1,5 @@
 package dev.leonetic.features.modules.client;
 
-import com.mojang.blaze3d.platform.InputConstants;
 import dev.leonetic.Homovore;
 import dev.leonetic.event.impl.ClientEvent;
 import dev.leonetic.event.system.Subscribe;
@@ -9,17 +8,12 @@ import dev.leonetic.features.gui.HomovoreGui;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Bind;
 import dev.leonetic.features.settings.Setting;
-import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.minecraft.client.KeyMapping;
-import net.minecraft.client.input.KeyEvent;
-import net.minecraft.resources.Identifier;
 import org.lwjgl.glfw.GLFW;
 
 import java.awt.*;
 
 public class ClickGuiModule extends Module {
     private static ClickGuiModule INSTANCE;
-    private static KeyMapping keyMapping;
 
     public Setting<String>  prefix           = str("Prefix", ".");
     public Setting<Theme>   theme            = mode("Theme", Theme.HOMOVORE);
@@ -93,7 +87,6 @@ public class ClickGuiModule extends Module {
         super("ClickGui", "Opens the ClickGui", Module.Category.CLIENT);
 
         this.bind.setValue(new Bind(GLFW.GLFW_KEY_RIGHT_SHIFT));
-        this.bind.setVisibility(v -> false);
         this.bindMode.setVisibility(v -> false);
 
         rainbowHue.setVisibility(v -> theme.getValue() == Theme.RAINBOW);
@@ -130,7 +123,6 @@ public class ClickGuiModule extends Module {
 
     @Override
     public void onLoad() {
-        syncModuleBind();
         Color fixedAccent = new Color(120, 175, 220, 220);
         Homovore.colorManager.register("ui",          () -> fixedAccent);
         Homovore.colorManager.register("chat",        this::chatAccent);
@@ -147,27 +139,6 @@ public class ClickGuiModule extends Module {
 
     public static ClickGuiModule getInstance() {
         return INSTANCE;
-    }
-
-    public static void registerKeyMapping() {
-        if (keyMapping != null) return;
-
-        KeyMapping.Category category = KeyMapping.Category.register(
-                Identifier.fromNamespaceAndPath("homovore", "homovore"));
-        keyMapping = KeyBindingHelper.registerKeyBinding(new KeyMapping(
-                "key.homovore.open_gui",
-                InputConstants.Type.KEYSYM,
-                GLFW.GLFW_KEY_RIGHT_SHIFT,
-                category));
-    }
-
-    public static boolean matchesKey(int key) {
-        return keyMapping != null && keyMapping.matches(new KeyEvent(key, 0, 0));
-    }
-
-    public static void syncModuleBind() {
-        if (INSTANCE == null || keyMapping == null) return;
-        INSTANCE.bind.setValue(new Bind(KeyBindingHelper.getBoundKeyOf(keyMapping).getValue()));
     }
 
     public enum Theme {

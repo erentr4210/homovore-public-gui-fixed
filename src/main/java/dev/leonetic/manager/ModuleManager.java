@@ -15,7 +15,6 @@ import dev.leonetic.features.modules.client.ClickGuiModule;
 import dev.leonetic.features.modules.client.HudClientModule;
 import dev.leonetic.features.modules.client.NotificationsModule;
 import dev.leonetic.features.modules.client.TargetsModule;
-import dev.leonetic.features.modules.client.TeleportLoggerModule;
 import dev.leonetic.features.modules.funny.TrickshotModule;
 import dev.leonetic.features.modules.funny.MoFuckerModule;
 import dev.leonetic.features.modules.movement.SprintModule;
@@ -68,7 +67,6 @@ public class ModuleManager implements Jsonable, Util {
         register(new ClickGuiModule());
         register(new NotificationsModule());
         register(new TargetsModule());
-        register(new TeleportLoggerModule());
         register(new AutoTrapModule());
         register(new OffhandModule());
         register(new AutoLogModule());
@@ -87,7 +85,6 @@ public class ModuleManager implements Jsonable, Util {
         register(new AutoPortalModule());
         register(new FastPortalModule());
         register(new FastuseModule());
-        register(new FreecamModule());
         register(new BlockHighlightModule());
         register(new BreadcrumbsModule());
         register(new BreakIndicatorsModule());

@@ -148,7 +148,10 @@ public class SpeedMineModule extends Module {
     }
 
     private boolean ensureMineSwap() {
-
+        // Keep the lease while it's still ours (active OR suspended by a borrow).
+        // Discarding a merely-suspended lease would force a re-acquire that a
+        // higher-priority active swap denies, dropping the pickaxe hold on the
+        // delayed-destroy block mid-dig.
         if (mineSwapHandle != null && !Homovore.swapManager.holds(mineSwapHandle)) {
             Homovore.swapManager.release(mineSwapHandle);
             mineSwapHandle = null;
@@ -295,7 +298,7 @@ public class SpeedMineModule extends Module {
             rebreakBlock = null;
         }
 
-        if (swing.getValue() && !usingMainhand() && (hasDelayedDestroy() || rebreakBlock != null)) {
+        if (swing.getValue() && (hasDelayedDestroy() || rebreakBlock != null)) {
             mc.player.swing(InteractionHand.MAIN_HAND);
             if (debugLog.getValue()) {
                 Homovore.LOGGER.info("[SpeedMine] swing (live dig: rebreak={} delayed={})",
@@ -307,14 +310,13 @@ public class SpeedMineModule extends Module {
         sustainDelayedDestroy();
 
         if (hasDelayedDestroy() && delayedDestroyBlock.ticksHeldPickaxe > singleBreakFailTicks.getValue()) {
-            if (!inBreakRange(delayedDestroyBlock.blockPos)) {
-                delayedDestroyBlock.cancelBreaking();
-                delayedDestroyBlock = null;
-            } else if (!usingMainhand()) {
-
+            if (inBreakRange(delayedDestroyBlock.blockPos)) {
                 delayedDestroyBlock.failRestarts++;
                 if (debugLog.getValue()) logFail("delayed-restart", delayedDestroyBlock);
                 delayedDestroyBlock.startBreaking(true);
+            } else {
+                delayedDestroyBlock.cancelBreaking();
+                delayedDestroyBlock = null;
             }
         }
 

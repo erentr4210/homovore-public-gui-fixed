@@ -37,6 +37,7 @@ public class NametagsModule extends Module {
     public Setting<Boolean> showDist    = bool("ShowDist",    true).setPage("Info");
     public Setting<Boolean> showPops    = bool("ShowPops",    true).setPage("Info");
     public Setting<Boolean> showResistance = bool("ShowResistance", true).setPage("Info");
+    public Setting<Boolean> showStrength   = bool("ShowStrength",   true).setPage("Info");
 
     public Setting<Color>   nameColor   = color("NameColor",   255, 255, 255, 255).setPage("Colors");
     public Setting<Color>   friendColor = color("FriendColor",   0, 255, 100, 255).setPage("Colors");
@@ -103,9 +104,15 @@ public class NametagsModule extends Module {
 
     private static final ItemStack GAPPLE_ICON = new ItemStack(Items.ENCHANTED_GOLDEN_APPLE);
 
+    private static final ItemStack STRENGTH_ICON = makePotionIcon(Potions.STRENGTH);
+
     private static ItemStack makeTurtleMasterIcon() {
+        return makePotionIcon(Potions.TURTLE_MASTER);
+    }
+
+    private static ItemStack makePotionIcon(net.minecraft.core.Holder<net.minecraft.world.item.alchemy.Potion> potion) {
         ItemStack stack = new ItemStack(Items.SPLASH_POTION);
-        stack.set(DataComponents.POTION_CONTENTS, new PotionContents(Potions.TURTLE_MASTER));
+        stack.set(DataComponents.POTION_CONTENTS, new PotionContents(potion));
         return stack;
     }
 
@@ -150,17 +157,19 @@ public class NametagsModule extends Module {
             ItemStack mainHand = Homovore.playerInfoManager.getMainHandItem(player);
             ItemStack offHand  = Homovore.playerInfoManager.getOffHandItem(player);
             String name = player.getGameProfile().name();
-            ItemStack resistanceIcon = null;
+            // Lead icons render left-to-right before the name; order here is their left-to-right order,
+            // so Strength sits to the right of any resistance potion icon.
+            List<ItemStack> leadIcons = new ArrayList<>(2);
             if (showResistance.getValue()) {
-                if (DamageSyncTracker.isTurtleMaster(player)) resistanceIcon = TURTLE_MASTER_ICON;
-                else if (DamageSyncTracker.hasResistance(player)) resistanceIcon = GAPPLE_ICON;
+                if (DamageSyncTracker.isTurtleMaster(player)) leadIcons.add(TURTLE_MASTER_ICON);
+                else if (DamageSyncTracker.hasResistance(player)) leadIcons.add(GAPPLE_ICON);
             }
-            ItemStack resIcon = resistanceIcon;
+            if (showStrength.getValue() && DamageSyncTracker.hasStrength(player)) leadIcons.add(STRENGTH_ICON);
 
             jobs.add(new RenderJob(dist * dist, () ->
                     renderNametag(graphics, px, py, pz, dist,
                             name, nameArgb, secondaryStr, pops,
-                            armor, mainHand, offHand, resIcon)));
+                            armor, mainHand, offHand, leadIcons)));
         }
 
         if (showPearls.getValue()) {
@@ -242,7 +251,7 @@ public class NametagsModule extends Module {
                                int totemPops,
                                Map<EquipmentSlot, ItemStack> armor,
                                ItemStack mainHand, ItemStack offHand,
-                               ItemStack resistanceIcon) {
+                               List<ItemStack> leadIcons) {
         float[] screen = MatrixCapture.worldToScreen(wx, wy, wz);
         if (screen == null) return;
 
@@ -260,10 +269,10 @@ public class NametagsModule extends Module {
         int textH    = mc.font.lineHeight;
         int textTopY = -textH;
 
-        boolean hasIcon = resistanceIcon != null;
-        int iconSize = hasIcon ? textH : 0;
-        int iconGap  = hasIcon ? 1 : 0;
-        int leadW    = iconSize + iconGap;
+        int iconCount = (leadIcons == null) ? 0 : leadIcons.size();
+        int iconSize  = iconCount > 0 ? textH : 0;
+        int iconGap   = 1;
+        int leadW     = iconCount * (iconSize + iconGap);
 
         int totalW   = leadW + nameW + secondaryW + popsW;
         int halfW    = totalW / 2;
@@ -275,14 +284,16 @@ public class NametagsModule extends Module {
 
         graphics.fill(-halfW - 2, textTopY - 1, halfW + 2, 1, bgColor.getValue().getRGB());
 
-        if (hasIcon) {
+        if (iconCount > 0) {
             float itemScale = iconSize / 16.0f;
             int iconY = textTopY + (textH - iconSize) / 2;
-            graphics.pose().pushMatrix();
-            graphics.pose().translate(-halfW, iconY);
-            graphics.pose().scale(itemScale, itemScale);
-            graphics.renderItem(resistanceIcon, 0, 0);
-            graphics.pose().popMatrix();
+            for (int k = 0; k < iconCount; k++) {
+                graphics.pose().pushMatrix();
+                graphics.pose().translate(-halfW + k * (iconSize + iconGap), iconY);
+                graphics.pose().scale(itemScale, itemScale);
+                graphics.renderItem(leadIcons.get(k), 0, 0);
+                graphics.pose().popMatrix();
+            }
         }
 
         graphics.drawString(mc.font, name, nameX, textTopY, nameArgb);
