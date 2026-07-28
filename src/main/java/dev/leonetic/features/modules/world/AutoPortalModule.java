@@ -6,7 +6,8 @@ import dev.leonetic.event.impl.render.Render3DEvent;
 import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
 import dev.leonetic.util.inventory.ResultType;
@@ -28,7 +29,6 @@ import java.util.List;
 import java.util.Map;
 
 public class AutoPortalModule extends Module {
-    private static final int IGNITE_PRIORITY = 40;
 
     private final Setting<Boolean> render       = bool("Render", true);
     private final Setting<Float>   fadeTime     = num("FadeTime", 1.0f, 0.05f, 2.0f);
@@ -142,7 +142,7 @@ public class AutoPortalModule extends Module {
                 return;
             }
             if (state.canBeReplaced()) {
-                if (Homovore.placementManager.enqueue(pos, obsidian.slot())) {
+                if (Homovore.placementManager.enqueue(pos, Items.OBSIDIAN)) {
                     renderMap.put(pos, now);
                 }
             } else {
@@ -161,10 +161,10 @@ public class AutoPortalModule extends Module {
 
         BlockPos firePos = portalBlocks.get(0).above();
         BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(firePos), Direction.UP, firePos, false);
-        Homovore.swapManager.submit(new SwapRequest("AutoPortal_ignite", IGNITE_PRIORITY, fas, () -> {
+        Homovore.swapManager.withSwap(fas, SwapMode.ALTSILENT, SwapPriority.USER_ACTION, () -> {
             mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, hit);
             mc.player.swing(InteractionHand.MAIN_HAND);
-        }));
+        });
     }
 
     private Result findHotbar(net.minecraft.world.item.Item item) {

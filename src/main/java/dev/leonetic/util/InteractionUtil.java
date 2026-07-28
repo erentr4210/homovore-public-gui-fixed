@@ -151,6 +151,46 @@ public class InteractionUtil implements Util {
         return speed;
     }
 
+    /**
+     * Per-tick break progress for mining {@code state} at {@code pos} with {@code stack} held,
+     * as a fraction of the block (so {@code 1 / delta} ticks to break it).
+     */
+    public static float getBreakDelta(ItemStack stack, BlockState state, BlockPos pos) {
+        float hardness = state.getDestroySpeed(mc.level, pos);
+        if (hardness == -1) return 0;
+
+        float speed = stack.getDestroySpeed(state);
+        if (speed > 1) {
+            int efficiency = EnchantmentUtil.getLevel(Enchantments.EFFICIENCY, stack);
+            if (efficiency > 0 && !stack.isEmpty()) speed += efficiency * efficiency + 1;
+        }
+
+        if (MobEffectUtil.hasDigSpeed(mc.player)) {
+            speed *= 1 + (MobEffectUtil.getDigSpeedAmplification(mc.player) + 1) * 0.2F;
+        }
+
+        if (mc.player.hasEffect(MobEffects.MINING_FATIGUE)) {
+            speed *= switch (mc.player.getEffect(MobEffects.MINING_FATIGUE).getAmplifier()) {
+                case 0 -> 0.3F;
+                case 1 -> 0.09F;
+                case 2 -> 0.0027F;
+                default -> 8.1E-4F;
+            };
+        }
+
+        if (mc.player.isEyeInFluid(FluidTags.WATER)
+                && !EnchantmentUtil.has(Enchantments.AQUA_AFFINITY, EquipmentSlot.HEAD)) {
+            speed /= 5.0F;
+        }
+
+        if (!mc.player.onGround()) {
+            speed /= 5.0F;
+        }
+
+        boolean harvestable = !state.requiresCorrectToolForDrops() || stack.isCorrectToolForDrops(state);
+        return speed / hardness / (harvestable ? 30 : 100);
+    }
+
     public static double breakDelta(double speed, BlockState block) {
         float hardness = block.getDestroySpeed(null, null);
         if (hardness == -1) return 0;

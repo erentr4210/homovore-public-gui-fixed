@@ -6,7 +6,8 @@ import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.mixin.client.ClientLevelAccessor;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
@@ -35,11 +36,11 @@ public class KeyPotionModule extends Module {
                     "KeyPotion", 20, yaw, pitch, RotationRequest.Mode.SILENT
             ));
             mc.gameMode.ensureHasSentCarriedItem();
-            Homovore.swapManager.submit(new SwapRequest("KeyPotion", 40, potion, r -> {
+            Homovore.swapManager.withSwap(potion, SwapMode.ALTSILENT, SwapPriority.USER_ACTION, () -> {
                 try (var handler = ((ClientLevelAccessor) mc.level).homovore$getBlockStatePredictionHandler().startPredicting()) {
-                    mc.getConnection().send(new ServerboundUseItemPacket(r.hand(), handler.currentSequence(), yaw, pitch));
+                    mc.getConnection().send(new ServerboundUseItemPacket(potion.hand(), handler.currentSequence(), yaw, pitch));
                 }
-            }));
+            });
         }
         disable();
     }

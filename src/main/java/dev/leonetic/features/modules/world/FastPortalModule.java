@@ -6,7 +6,8 @@ import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.mixin.client.ClientLevelAccessor;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
@@ -62,11 +63,11 @@ public class FastPortalModule extends Module {
         Homovore.rotationManager.submit(new RotationRequest("fastportal", 20, yaw, pitch, RotationRequest.Mode.SILENT));
 
         mc.gameMode.ensureHasSentCarriedItem();
-        boolean sent = Homovore.swapManager.submit(new SwapRequest("FastPortal", 20, pearl, r -> {
+        boolean sent = Homovore.swapManager.withSwap(pearl, SwapMode.ALTSILENT, SwapPriority.UTILITY, () -> {
             try (var handler = ((ClientLevelAccessor) mc.level).homovore$getBlockStatePredictionHandler().startPredicting()) {
-                mc.getConnection().send(new ServerboundUseItemPacket(r.hand(), handler.currentSequence(), yaw, pitch));
+                mc.getConnection().send(new ServerboundUseItemPacket(pearl.hand(), handler.currentSequence(), yaw, pitch));
             }
-        }));
+        });
 
         if (sent) cooldownTicks = (int) (cooldown.getValue() * 20);
     }

@@ -33,10 +33,9 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.Shapes;
 
 import java.awt.Color;
-import java.util.EnumSet;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.Queue;
 import java.util.Set;
 
 public class AutoMineModule extends Module {
@@ -214,17 +213,17 @@ public class AutoMineModule extends Module {
         boolean prioHead = false;
 
         if (antiSwim.getValue() == AntiSwimMode.Always && shouldBreakSelfHeadBlock) {
-            mine.silentBreakBlock(selfHeadPos, 10);
+            mine.requestBreak(selfHeadPos);
             prioHead = true;
         }
         if (antiSwim.getValue() == AntiSwimMode.MineOrSwim && mc.player.isVisuallyCrawling()
                 && shouldBreakSelfHeadBlock) {
-            mine.silentBreakBlock(selfHeadPos, 30);
+            mine.requestBreak(selfHeadPos);
             prioHead = true;
         }
         if ((antiSwim.getValue() == AntiSwimMode.Mine || antiSwim.getValue() == AntiSwimMode.MineOrSwim)
                 && isBlockBeingBroken(mc.player.blockPosition()) && shouldBreakSelfHeadBlock) {
-            mine.silentBreakBlock(selfHeadPos, 20);
+            mine.requestBreak(selfHeadPos);
             prioHead = true;
         }
 
@@ -233,8 +232,8 @@ public class AutoMineModule extends Module {
 
         handleGlassPush(mine);
 
-        if (mine.hasDelayedDestroy() && selfHeadBlock.is(Blocks.OBSIDIAN) && selfFeetBlock.isAir()
-                && selfHeadPos.equals(mine.getRebreakBlockPos())) {
+        if (mine.getSecondaryPos() != null && selfHeadBlock.is(Blocks.OBSIDIAN) && selfFeetBlock.isAir()
+                && selfHeadPos.equals(mine.getRebreakPos())) {
             return;
         }
 
@@ -242,28 +241,17 @@ public class AutoMineModule extends Module {
 
         findTargetBlocks();
 
-        boolean isTargetingFeetBlock = (target1 != null && target1.isFeetBlock)
-                || (target2 != null && target2.isFeetBlock);
+        int free = 0;
+        if (mine.hasFreePrimary()) free++;
+        if (mine.hasFreeSecondary()) free++;
+        if (free == 0) return;
 
-        if (!isTargetingFeetBlock && mine.canRebreakRebreakBlock()
-                && ((target1 != null && target1.blockPos.equals(mine.getRebreakBlockPos()))
-                || (target2 != null && target2.blockPos.equals(mine.getRebreakBlockPos())))) {
-            return;
-        }
+        Deque<BlockPos> wanted = new ArrayDeque<>();
+        if (target1 != null && !mine.isMining(target1.blockPos)) wanted.add(target1.blockPos);
+        if (target2 != null && !mine.isMining(target2.blockPos)) wanted.add(target2.blockPos);
 
-        boolean hasBothInProgress = mine.hasDelayedDestroy() && mine.hasRebreakBlock()
-                && !mine.canRebreakRebreakBlock();
-        if (hasBothInProgress && !mine.hasFailingBlock()) return;
-
-        Queue<BlockPos> targetBlocks = new LinkedList<>();
-        if (target1 != null) targetBlocks.add(target1.blockPos);
-        if (target2 != null) targetBlocks.add(target2.blockPos);
-
-        while (!targetBlocks.isEmpty() && mine.alreadyBreaking(targetBlocks.peek())) {
-            targetBlocks.remove();
-        }
-        if (!targetBlocks.isEmpty()) {
-            mine.silentBreakBlock(targetBlocks.remove(), 10);
+        for (int sent = 0; !wanted.isEmpty() && sent < free; sent++) {
+            mine.requestBreak(wanted.remove());
         }
     }
 
@@ -279,7 +267,7 @@ public class AutoMineModule extends Module {
         if (!isBlocked(feetPos, feetBlock) || !isBlocked(headPos, headBlock)) return false;
         if (!InteractionUtil.canBreak(feetPos, feetBlock)) return false;
 
-        return mine.silentBreakBlock(feetPos, 200);
+        return mine.requestBreak(feetPos);
     }
 
     private boolean isBlocked(BlockPos pos, BlockState state) {
@@ -331,8 +319,7 @@ public class AutoMineModule extends Module {
         AutoCrystalModule crystal = Homovore.moduleManager.getModuleByClass(AutoCrystalModule.class);
         if (crystal == null || !crystal.isEnabled()) { resetGlass(); return; }
 
-        if (!mine.canRebreakRebreakBlock()) { resetGlass(); return; }
-        BlockPos pos = mine.getRebreakBlockPos();
+        BlockPos pos = mine.getRebreakPos();
         if (pos == null) { resetGlass(); return; }
 
         if (!isGoodRebreak(pos, inBedrockCase()) || !crystal.isDesirablePlacement(pos)) {
@@ -378,7 +365,7 @@ public class AutoMineModule extends Module {
         Result glass = InventoryUtil.find(Items.GLASS, InventoryUtil.PLACE_SCOPE);
         if (!glass.found()) return false;
         if (!PlaceUtil.canPlace(pos)) return false;
-        if (!Homovore.placementManager.enqueue(pos, glass.slot())) return false;
+        if (!Homovore.placementManager.enqueue(pos, Items.GLASS)) return false;
         Homovore.placementManager.flushQueue();
         return true;
     }
@@ -389,9 +376,26 @@ public class AutoMineModule extends Module {
     }
 
     private void findTargetBlocks() {
-        target1 = findCityBlock(null);
-        ignorePos = target1 != null ? target1.blockPos : null;
-        target2 = findCityBlock(target1 != null ? target1.blockPos : null);
+        target1 = null;
+        target2 = null;
+        ignorePos = null;
+
+        CityBlock best = findCityBlock(null);
+        if (best == null) return;
+
+        target1 = best;
+        ignorePos = target1.blockPos;
+
+        if (best.type == CheckPosType.TerrainBase) {
+            // mine the crystal base first, then the surround block above it
+            CityBlock above = new CityBlock();
+            above.blockPos = best.blockPos.above();
+            above.score = best.score - 10;
+            above.type = CheckPosType.Surround;
+            target2 = above;
+        } else {
+            target2 = findCityBlock(target1.blockPos);
+        }
     }
 
     private CityBlock findCityBlock(BlockPos exclude) {
@@ -412,7 +416,7 @@ public class AutoMineModule extends Module {
             if (score > bestBlock.score) {
                 bestBlock.score = score;
                 bestBlock.blockPos = pos.blockPos;
-                bestBlock.isFeetBlock = isBlockInFeet(pos.blockPos);
+                bestBlock.type = pos.type;
                 set = true;
             }
         }
@@ -429,18 +433,20 @@ public class AutoMineModule extends Module {
 
         if (block.isAir() && !goodRebreak) return INVALID_SCORE;
         if (!canBreak(blockPos, block) && !goodRebreak) return INVALID_SCORE;
-        if (!mine.inBreakRange(blockPos)) return INVALID_SCORE;
+        if (!mine.inMineRange(blockPos)) return INVALID_SCORE;
 
         double score = inBedrock ? scoreBedrock(pos) : scoreNormal(pos);
         if (score == INVALID_SCORE) return INVALID_SCORE;
-        if (goodRebreak) score += 40;
+        // keep the current rebreak block sticky so we don't thrash it away
+        if (goodRebreak) score += inBedrock && block.isAir() ? 10 : 40;
         return score;
     }
 
     private boolean isGoodRebreak(BlockPos blockPos, boolean inBedrock) {
         SpeedMineModule mine = speedMine();
-        if (mine == null || !mine.canRebreakRebreakBlock()) return false;
-        if (!blockPos.equals(mine.getRebreakBlockPos())) return false;
+        if (mine == null) return false;
+        BlockPos rebreak = mine.getRebreakPos();
+        if (rebreak == null || !blockPos.equals(rebreak)) return false;
 
         if (inBedrock) {
             boolean isSelfTrapBlock = false;
@@ -479,9 +485,10 @@ public class AutoMineModule extends Module {
                 if (isBlockInFeet(surround)) continue;
                 checkPos.add(new CheckPos(surround, CheckPosType.Surround));
 
+                // don't mine the block under the surround if it's a crystal base we want to keep
                 if (underMine.getValue()) {
                     BlockPos base = surround.below();
-                    if (canBreak(base, mc.level.getBlockState(base))) {
+                    if (!isCrystalBlock(base) && canBreak(base, mc.level.getBlockState(base))) {
                         checkPos.add(new CheckPos(base, CheckPosType.TerrainBase));
                     }
                 }
@@ -513,26 +520,41 @@ public class AutoMineModule extends Module {
     }
 
     private void addBedrockCaseCheckPositions(Set<CheckPos> checkPos) {
-        AABB feetBox = targetFeetBox();
+        boolean isCrawling = targetPlayer.isVisuallyCrawling();
 
-        boolean canFallDown = BlockPos.betweenClosedStream(feetBox)
-                .allMatch(bp -> !mc.level.getBlockState(bp.below()).is(Blocks.BEDROCK));
-        boolean canBeHitUp = BlockPos.betweenClosedStream(feetBox)
-                .allMatch(bp -> !mc.level.getBlockState(bp.above(2)).is(Blocks.BEDROCK));
+        for (BlockPos raw : iterate(targetFeetBox())) {
+            BlockPos pos = raw.immutable();
 
-        for (BlockPos pos : iterate(feetBox)) {
-            BlockPos p = pos.immutable();
-            if (canFallDown) checkPos.add(new CheckPos(p.below(), CheckPosType.Below));
-            if (canBeHitUp)  checkPos.add(new CheckPos(p.above(2), CheckPosType.Head));
-
-            checkPos.add(new CheckPos(p.above(), CheckPosType.FacePlace));
-            for (Direction dir : HORIZONTAL) {
-                checkPos.add(new CheckPos(p.above().relative(dir), CheckPosType.FacePlace));
+            // face place into their head, else knock the block above it out to open one up
+            BlockPos headPos = isCrawling ? pos : pos.above();
+            BlockPos aboveHeadPos = headPos.above();
+            if (canBreak(headPos, mc.level.getBlockState(headPos))) {
+                checkPos.add(new CheckPos(headPos, CheckPosType.FacePlace));
+            } else if (canBreak(aboveHeadPos, mc.level.getBlockState(aboveHeadPos))) {
+                checkPos.add(new CheckPos(aboveHeadPos, CheckPosType.Head));
             }
 
-            checkPos.add(new CheckPos(p, CheckPosType.Surround));
+            if (!mc.level.getBlockState(pos.below()).is(Blocks.BEDROCK)) {
+                BlockPos center = pos.below();
+                boolean plusNotFinished = false;
+                for (Direction dir : HORIZONTAL) {
+                    BlockPos surround = center.relative(dir);
+                    if (!canBreak(surround, mc.level.getBlockState(surround))) continue;
+                    // don't mine the sides below the player if they're crystal bases we want to keep
+                    if (isCrystalBlock(surround) && mc.level.getBlockState(surround.above()).isAir()) continue;
+                    checkPos.add(new CheckPos(surround, CheckPosType.Below));
+                    plusNotFinished = true;
+                }
+                if (!plusNotFinished && canBreak(center, mc.level.getBlockState(center))) {
+                    checkPos.add(new CheckPos(center, CheckPosType.Below));
+                }
+            }
+
+            checkPos.add(new CheckPos(pos, CheckPosType.Surround));
             for (Direction dir : HORIZONTAL) {
-                checkPos.add(new CheckPos(p.relative(dir), CheckPosType.Surround));
+                BlockPos surround = pos.relative(dir);
+                if (isBlockInFeet(surround)) continue;
+                checkPos.add(new CheckPos(surround, CheckPosType.Surround));
             }
         }
     }
@@ -628,6 +650,10 @@ public class AutoMineModule extends Module {
                     if (isSelfTrapBlock) score += 7.5;
                 }
             }
+        }
+
+        if (pos.type == CheckPosType.Below) {
+            score += blockPos.equals(targetPlayer.blockPosition().below()) ? 25 : 30;
         }
 
         double d = targetPlayer.position().distanceTo(Vec3.atCenterOf(blockPos));
@@ -754,7 +780,7 @@ public class AutoMineModule extends Module {
     private static class CityBlock {
         BlockPos blockPos;
         double score;
-        boolean isFeetBlock = false;
+        CheckPosType type;
     }
 
     private static final class CheckPos {
@@ -766,15 +792,15 @@ public class AutoMineModule extends Module {
             this.type = type;
         }
 
+        // equality on position only, so duplicate positions collapse regardless of type
         @Override
         public int hashCode() {
-            return blockPos.hashCode() * 31 + type.ordinal();
+            return blockPos.hashCode();
         }
 
         @Override
         public boolean equals(Object o) {
-            return o instanceof CheckPos other
-                    && other.type == type && other.blockPos.equals(blockPos);
+            return o instanceof CheckPos other && other.blockPos.equals(blockPos);
         }
     }
 

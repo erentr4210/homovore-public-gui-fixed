@@ -13,6 +13,7 @@ import dev.leonetic.util.PlaceUtil;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.ResultType;
 import dev.leonetic.util.render.RenderUtil;
+import dev.leonetic.util.player.EatUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.protocol.game.ClientboundSoundPacket;
@@ -80,6 +81,7 @@ public class AutoTrapModule extends Module {
 
     private LivingEntity target;
     private int cachedSlot = -1;
+    private Item cachedItem = null;
 
     private boolean buildInterceptNext = true;
     private long lastPlaceTime = 0L;
@@ -93,9 +95,8 @@ public class AutoTrapModule extends Module {
     private final PlacementManager.PlacementListener airRefillListener = (pos, nowAir) -> {
         ownedQueued.remove(pos);
         if (!nowAir || !wantedPoses.contains(pos)) return;
-        int slot = cachedSlot;
-        if (slot < 0 || !PlaceUtil.canPlace(pos)) return;
-        if (Homovore.placementManager.enqueue(pos, slot)) {
+        if (cachedSlot < 0 || !PlaceUtil.canPlace(pos)) return;
+        if (Homovore.placementManager.enqueue(pos, cachedItem)) {
             ownedQueued.add(pos);
         }
     };
@@ -124,6 +125,7 @@ public class AutoTrapModule extends Module {
         resetInterceptLock();
         target = null;
         cachedSlot = -1;
+        cachedItem = null;
     }
 
     private void resetInterceptLock() {
@@ -164,10 +166,12 @@ public class AutoTrapModule extends Module {
         int slot = resolveSlot();
         if (slot < 0) {
             cachedSlot = -1;
+            cachedItem = null;
             wantedPoses.clear();
             return;
         }
         cachedSlot = slot;
+        cachedItem = mc.player.getInventory().getItem(slot).getItem();
 
         LivingEntity sel = findTarget();
         if (target == null || !isValidStillTarget(target)) {
@@ -189,8 +193,7 @@ public class AutoTrapModule extends Module {
 
         if (pauseEat.getValue() && mc.player.isUsingItem()) return;
 
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        if (offhand != null && offhand.shouldDeferForEat()) return;
+        if (EatUtil.shouldDefer()) return;
 
         if (target.isFallFlying() && !buildInterceptNext
                 && System.currentTimeMillis() - lastPlaceTime > INTERCEPT_TIMEOUT_MS) {
@@ -256,7 +259,7 @@ public class AutoTrapModule extends Module {
             BlockState state = mc.level.getBlockState(pos);
             if (!state.canBeReplaced()) continue;
             if (!PlaceUtil.canPlace(pos)) continue;
-            if (Homovore.placementManager.enqueue(pos, cachedSlot)) {
+            if (Homovore.placementManager.enqueue(pos, cachedItem)) {
                 ownedQueued.add(pos);
                 renderMap.put(pos, now);
                 placedAny = true;

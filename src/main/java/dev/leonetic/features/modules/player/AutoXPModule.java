@@ -8,7 +8,8 @@ import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Bind;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.mixin.client.ClientLevelAccessor;
 import dev.leonetic.util.EnchantmentUtil;
 import dev.leonetic.util.inventory.InventoryUtil;
@@ -117,13 +118,13 @@ public class AutoXPModule extends Module {
         float pitch = 90f;
         Homovore.rotationManager.submit(new RotationRequest("AutoXP", 40, yaw, pitch, RotationRequest.Mode.SILENT));
         mc.gameMode.ensureHasSentCarriedItem();
-        Homovore.swapManager.submit(new SwapRequest("AutoXP", 100, xp, r -> {
+        Homovore.swapManager.withSwap(xp, SwapMode.ALTSILENT, SwapPriority.UTILITY, () -> {
             for (int i = 0; i < amount; i++) {
                 try (var handler = ((ClientLevelAccessor) mc.level).homovore$getBlockStatePredictionHandler().startPredicting()) {
-                    mc.getConnection().send(new ServerboundUseItemPacket(r.hand(), handler.currentSequence(), yaw, pitch));
+                    mc.getConnection().send(new ServerboundUseItemPacket(xp.hand(), handler.currentSequence(), yaw, pitch));
                 }
             }
-        }));
+        });
     }
 
     private boolean shouldThrowNow() {

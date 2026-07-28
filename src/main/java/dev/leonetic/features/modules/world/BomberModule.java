@@ -5,7 +5,8 @@ import dev.leonetic.event.impl.entity.player.PreTickEvent;
 import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
 import dev.leonetic.util.inventory.ResultType;
@@ -22,7 +23,6 @@ public class BomberModule extends Module {
     private final Setting<Integer> delay       = num("Delay",  6,    0,    20);
     private final Setting<Boolean> autoDisable = bool("AutoDisable", false);
 
-    private static final int IGNITE_PRIORITY = 40;
 
     private int      ticksWaited = 0;
     private BlockPos lastPos     = null;
@@ -71,7 +71,7 @@ public class BomberModule extends Module {
 
                 lastPos = pos;
 
-                if (!Homovore.placementManager.enqueue(pos, tnt.slot())) continue;
+                if (!Homovore.placementManager.enqueue(pos, tnt.stack().getItem())) continue;
                 Homovore.placementManager.flushQueue();
 
                 igniteAt(pos, fas);
@@ -82,10 +82,10 @@ public class BomberModule extends Module {
 
     private void igniteAt(BlockPos pos, Result fas) {
         BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(pos), Direction.UP, pos, false);
-        Homovore.swapManager.submit(new SwapRequest("Bomber_ignite", IGNITE_PRIORITY, fas, () -> {
+        Homovore.swapManager.withSwap(fas, SwapMode.ALTSILENT, SwapPriority.USER_ACTION, () -> {
             mc.gameMode.useItemOn(mc.player, InteractionHand.MAIN_HAND, hit);
             mc.player.swing(InteractionHand.MAIN_HAND);
-        }));
+        });
     }
 
     private Result findHotbar(Item item) {

@@ -76,7 +76,7 @@ public class PearlBlockerModule extends Module {
             if (target == null) continue;
 
             if (!PlaceUtil.canPlace(target)) continue;
-            if (Homovore.placementManager.enqueue(target, obsSlot)) {
+            if (Homovore.placementManager.enqueue(target, Items.OBSIDIAN)) {
                 renderMap.put(target.immutable(), now);
             }
 

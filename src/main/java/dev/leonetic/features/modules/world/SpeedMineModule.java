@@ -3,243 +3,121 @@ package dev.leonetic.features.modules.world;
 import dev.leonetic.Homovore;
 import dev.leonetic.event.impl.entity.player.PreTickEvent;
 import dev.leonetic.event.impl.network.AttackBlockEvent;
-import dev.leonetic.event.impl.network.PacketEvent;
 import dev.leonetic.event.impl.render.Render3DEvent;
 import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
-import dev.leonetic.features.modules.combat.OffhandModule;
 import dev.leonetic.features.settings.Setting;
-import dev.leonetic.manager.SwapManager;
-import dev.leonetic.manager.SwapRequest;
-import dev.leonetic.mixin.client.ClientLevelAccessor;
-import dev.leonetic.mixin.entity.EntityRotationAccessor;
-import dev.leonetic.util.EnchantmentUtil;
-import dev.leonetic.util.inventory.InventoryUtil;
+import dev.leonetic.util.InteractionUtil;
 import dev.leonetic.util.inventory.Result;
 import dev.leonetic.util.inventory.ResultType;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.util.render.RenderUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket;
-import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
-import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
-import net.minecraft.tags.FluidTags;
+import net.minecraft.network.protocol.game.ServerboundSwingPacket;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.entity.EquipmentSlot;
-import net.minecraft.world.effect.MobEffectUtil;
-import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.enchantment.Enchantments;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.shapes.VoxelShape;
 
 import java.awt.Color;
+import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
 
-public class SpeedMineModule extends Module {
+public class SpeedMineModule extends Module implements MineApi {
 
-    private static final double USER_PRIORITY = 100.0;
+    private static final int DECOY_Y_OFFSET = 2000;
 
-    private static final int MINE_SWAP_PRIORITY = 65;
+    private static final double GRIM_MIN_EYE = 0.4;
+    private static final double GRIM_MAX_EYE = 1.62;
 
-    private SilentMineBlock rebreakBlock;
-    private SilentMineBlock delayedDestroyBlock;
-    private BlockPos lastDelayedDestroyBlockPos;
+    /** ticks past the predicted server completion before the secondary is written off. */
+    private static final int SECONDARY_TIMEOUT = 10;
+
+    /** how far inside a face the BreakAhead ray has to exit for it to count as straight-through. */
+    private static final double BREAK_AHEAD_EDGE = 0.05;
+
+    private final Setting<Double> threshold = num("Threshold", 0.7, 0.1, 1.0);
+    private final Setting<Integer> fudgeTicks = num("FudgeTicks", 1, 0, 5);
+    private final Setting<Integer> breakDelay = num("BreakDelay", 6, 0, 10);
+    private final Setting<Boolean> pauseOnEat = bool("PauseOnEat", true);
+    private final Setting<Boolean> decoy = bool("GrimDecoy", true);
+    private final Setting<Boolean> doubleBreak = bool("DoubleBreak", true);
+    private final Setting<Boolean> breakAhead = bool("BreakAhead", false);
+    private final Setting<Boolean> rebreak = bool("Rebreak", true);
+    private final Setting<Boolean> swing = bool("Swing", true);
+    private final Setting<Double> range = num("Range", 5.0, 1.0, 7.0);
+
+    private final Setting<Boolean> render = bool("Render", true).setPage("Render");
+    private final Setting<Float> lineWidth = num("LineWidth", 2.0f, 0.5f, 5.0f).setPage("Render");
+    private final Setting<Color> lineColor = color("LineColor", 255, 255, 255, 150).setPage("Render");
+    private final Setting<Color> sideColor = color("SideColor", 255, 255, 255, 40).setPage("Render");
+    private final Setting<Color> primaryColor = color("PrimaryColor", 255, 180, 255, 60).setPage("Render");
+
+    private BlockPos pos;
+    private Direction direction;
+    private int ticks;
+    private double progress;
+    private boolean started;
+    private boolean finished;
+
+    private BlockPos secondaryPos;
+    private int secondaryTicks;
+    private boolean secondaryHolding;
+    private double secondaryProgress;
+
+    private int stopCooldown;
+
+    private long lastStopMs;
+    private double delayBalance;
 
     private BlockPos rebreakHoldPos;
     private int rebreakHoldTicks;
 
-    private double currentServerTick;
-
-    private boolean brokeThisTick;
-
-    private SwapManager.SwapHandle mineSwapHandle;
-
-    private int mineSwapIdleTicks;
-
-    private boolean heldPickaxeThisTick;
-
-    private boolean usingMainhandThisTick;
-
     public interface MineFinishListener { void onMineFinish(BlockPos pos); }
-    private final java.util.concurrent.CopyOnWriteArrayList<MineFinishListener> finishListeners =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
-    public void addFinishListener(MineFinishListener l)    { finishListeners.addIfAbsent(l); }
+
+    private final CopyOnWriteArrayList<MineFinishListener> finishListeners = new CopyOnWriteArrayList<>();
+
+    public void addFinishListener(MineFinishListener l) { finishListeners.addIfAbsent(l); }
+
     public void removeFinishListener(MineFinishListener l) { finishListeners.remove(l); }
-    private void fireFinish(BlockPos pos) {
-        for (MineFinishListener l : finishListeners) l.onMineFinish(pos);
+
+    private void fireFinish(BlockPos target) {
+        for (MineFinishListener l : finishListeners) l.onMineFinish(target);
     }
 
-    private final Setting<Boolean> swing              = bool("Swing", false);
-    private final Setting<Integer> swapHoldGraceTicks = num("SwapHoldGraceTicks", 2, 0, 40);
-    private final Setting<Integer> singleBreakFailTicks = num("SingleBreakFailTicks", 20, 5, 50);
-
-    private final Setting<Boolean> debugLog           = bool("DebugLog", true);
-    private final Setting<Boolean> rebreakSetBroken   = bool("ClientSideBreak", true);
-
-    private static final float BREAK_RANGE = 5.5f;
-
-    private final Setting<Boolean> render             = bool("Render", true).setPage("Render");
-    private final Setting<Float>   lineWidth          = num("LineWidth", 2.0f, 0.5f, 5.0f).setPage("Render");
-    private final Setting<Color>   lineColor          = color("LineColor", 255, 255, 255, 150).setPage("Render");
-    private final Setting<Color>   sideColor          = color("SideColor", 255, 255, 255, 40).setPage("Render");
-    private final Setting<Color>   primaryColor       = color("PrimaryColor", 255, 180, 255, 60).setPage("Render");
-
     public SpeedMineModule() {
-        super(
-                "SpeedMine",
-                "Mines two blocks simultaneously using GrimV3 packet mining (gware SilentMine port)",
-                Category.WORLD
-        );
+        super("SpeedMine", "Packet mines the clicked block at best-tool speed behind a Grim decoy, then rebreaks it.", Category.WORLD);
+
+        breakAhead.setVisibility(v -> doubleBreak.getValue());
+        lineWidth.setVisibility(v -> render.getValue());
+        lineColor.setVisibility(v -> render.getValue());
+        sideColor.setVisibility(v -> render.getValue());
+        primaryColor.setVisibility(v -> render.getValue());
     }
 
     @Override
     public void onDisable() {
-        if (rebreakBlock != null) rebreakBlock.cancelBreaking();
-        if (delayedDestroyBlock != null) delayedDestroyBlock.cancelBreaking();
-        rebreakBlock = null;
-        delayedDestroyBlock = null;
-        lastDelayedDestroyBlockPos = null;
-
-        if (mineSwapHandle != null) {
-            Homovore.swapManager.release(mineSwapHandle);
-            mineSwapHandle = null;
+        if (!nullCheck() && pos != null && started && !finished) {
+            abortBreak();
         }
-        mineSwapIdleTicks = 0;
+        clearSecondary();
+        clearMine();
+        rebreakHoldPos = null;
+        rebreakHoldTicks = 0;
     }
 
-    private double serverTick() {
-        return mc.level != null ? mc.level.getGameTime() : currentServerTick;
-    }
-
-    private double renderTick(float partial) {
-        return serverTick() + partial;
-    }
-
-    private boolean withPickaxe(BlockState state, Runnable burst, boolean rebreak) {
-        Result pickaxe = bestPickaxeResult(state);
-
-        if (!pickaxe.found() || pickaxe.holding()) {
-            if (!rebreak && pickaxe.holding() && mineSwapHandle != null) heldPickaxeThisTick = true;
-            burst.run();
-            return true;
-        }
-
-        if (usingMainhand()) return false;
-
-        if (!rebreak) {
-            if (!ensureMineSwap()) return false;
-
-            if (InventoryUtil.selected() != pickaxe.slot()) InventoryUtil.swap(pickaxe);
-            heldPickaxeThisTick = true;
-            burst.run();
-            return true;
-        }
-
-        return Homovore.swapManager.submit(new SwapRequest(
-                "SpeedMine", MINE_SWAP_PRIORITY, pickaxe, burst, false));
-    }
-
-    private boolean usingMainhand() {
-        return usingMainhandThisTick;
-    }
-
-    private boolean ensureMineSwap() {
-        // Keep the lease while it's still ours (active OR suspended by a borrow).
-        // Discarding a merely-suspended lease would force a re-acquire that a
-        // higher-priority active swap denies, dropping the pickaxe hold on the
-        // delayed-destroy block mid-dig.
-        if (mineSwapHandle != null && !Homovore.swapManager.holds(mineSwapHandle)) {
-            Homovore.swapManager.release(mineSwapHandle);
-            mineSwapHandle = null;
-        }
-        if (mineSwapHandle == null) {
-            mineSwapHandle = Homovore.swapManager.acquireLease("SpeedMine", MINE_SWAP_PRIORITY);
-            if (mineSwapHandle == null) return false;
-        }
-        return Homovore.swapManager.holdsActive(mineSwapHandle);
-    }
-
-    public boolean silentBreakBlock(BlockPos pos, double priority) {
-        return silentBreakBlock(pos, Direction.UP, priority);
-    }
-
-    public boolean silentBreakBlock(BlockPos blockPos, Direction direction, double priority) {
-        if (nullCheck()) return false;
-        if (mc.player.isCreative() || mc.player.isSpectator()) return false;
-        if (blockPos == null || alreadyBreaking(blockPos)) return false;
-        if (!canBreak(blockPos)) return false;
-        if (!inBreakRange(blockPos)) return false;
-
-        evictFailing(blockPos);
-
-        if (!hasDelayedDestroy() && rebreakBlock != null && !blockPos.equals(rebreakBlock.blockPos)) {
-            promoteRebreakToDelayedDestroy();
-        }
-
-        if (!hasDelayedDestroy() && rebreakBlock == null) {
-            rebreakBlock = new SilentMineBlock(blockPos, direction, priority, true);
-            rebreakBlock.startBreaking(false);
-            return true;
-        }
-
-        if (alreadyBreaking(blockPos)) {
-            return true;
-        }
-
-        if (rebreakBlock != null && delayedDestroyBlock != null
-                && (priority >= rebreakBlock.priority || canRebreakRebreakBlock())) {
-            if (delayedDestroyBlock.getBreakProgress() <= 0.8) {
-                rebreakBlock = null;
-            }
-        }
-
-        if (rebreakBlock == null) {
-            rebreakBlock = new SilentMineBlock(blockPos, direction, priority, true);
-            rebreakBlock.startBreaking(false);
-        }
-        return true;
-    }
-
-    private void evictFailing(BlockPos keepPos) {
-        if (rebreakBlock != null && rebreakBlock.isFailing() && !rebreakBlock.blockPos.equals(keepPos)) {
-            if (debugLog.getValue()) logFail("evict-rebreak", rebreakBlock);
-            rebreakBlock.cancelBreaking();
-            rebreakBlock = null;
-        }
-        if (delayedDestroyBlock != null && delayedDestroyBlock.isFailing()
-                && !delayedDestroyBlock.blockPos.equals(keepPos)) {
-            if (debugLog.getValue()) logFail("evict-delayed", delayedDestroyBlock);
-            delayedDestroyBlock.cancelBreaking();
-            delayedDestroyBlock = null;
-        }
-    }
-
-    public boolean hasFailingBlock() {
-        return (rebreakBlock != null && rebreakBlock.isFailing())
-                || (delayedDestroyBlock != null && delayedDestroyBlock.isFailing());
-    }
-
-    private void logFail(String why, SilentMineBlock b) {
-        Homovore.LOGGER.info(
-                "[SpeedMine][FAIL] {} pos={} beenAir={} sends={} heldTicks={} restarts={} prog={} "
-                        + "srvGround={} willGround={}",
-                why, b.blockPos, b.beenAir, b.timesSendBreakPacket, b.ticksHeldPickaxe, b.failRestarts,
-                String.format("%.2f", b.getBreakProgress()), serverKnownOnGround(), willBeOnGround());
-    }
-
-    private void promoteRebreakToDelayedDestroy() {
-        if (rebreakBlock == null || delayedDestroyBlock != null) return;
-        delayedDestroyBlock = rebreakBlock.promoteToDelayedDestroy();
-        rebreakBlock = null;
-    }
-
-    public boolean alreadyBreaking(BlockPos blockPos) {
-        return (rebreakBlock != null && blockPos.equals(rebreakBlock.blockPos))
-                || (delayedDestroyBlock != null && blockPos.equals(delayedDestroyBlock.blockPos));
+    @Override
+    public String getDisplayInfo() {
+        String extra = secondaryPos != null ? " +1" : "";
+        if (pos == null) return secondaryPos != null ? "+1" : null;
+        if (!started) return "wait" + extra;
+        return (finished ? "rebreak" : (int) (Math.min(progress / threshold.getValue(), 1) * 100) + "%") + extra;
     }
 
     @Subscribe
@@ -249,508 +127,423 @@ public class SpeedMineModule extends Module {
 
         event.cancel();
 
-        silentBreakBlock(event.getPos(), event.getDirection(), USER_PRIORITY);
+        if (isMining(event.getPos())) return;
+        if (!InteractionUtil.canBreak(event.getPos(), event.getState())) return;
+
+        // start the block behind first so it gets demoted into the secondary slot and
+        // finishes on its own while the clicked block runs as the primary break.
+        BlockPos ahead = breakAheadPos(event.getPos());
+        if (ahead != null) startMine(ahead, validFace(ahead));
+
+        startMine(event.getPos(), event.getDirection());
     }
 
-    @Subscribe(priority = 10)
-    private void onPreTick(PreTickEvent event) {
-        if (nullCheck()) return;
-        if (mc.player.isCreative() || mc.player.isSpectator()) return;
+    /**
+     * Traces the look ray through the clicked block and returns the block it continues into,
+     * or null if it leaves through an edge / into something we can't mine. Straight-on mining
+     * (any of the 8 compass directions) exits cleanly through a face, while grazing a corner
+     * lands too close to the face border and is rejected so we don't waste the second slot.
+     */
+    private BlockPos breakAheadPos(BlockPos target) {
+        if (!breakAhead.getValue() || !doubleBreak.getValue()) return null;
+        // only when both slots are free, so we never disturb a break already in progress
+        if (secondaryPos != null || (pos != null && started && !finished)) return null;
 
-        diagTick = (long) serverTick();
+        Vec3 eye = mc.player.getEyePosition();
+        Vec3 dir = mc.player.getLookAngle();
+        AABB box = new AABB(target);
 
-        brokeThisTick = false;
-        heldPickaxeThisTick = false;
+        double tEnter = Double.NEGATIVE_INFINITY;
+        double tExit = Double.POSITIVE_INFINITY;
+        Direction exitFace = null;
 
-        if (rebreakHoldTicks > 0) rebreakHoldTicks--;
-
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        usingMainhandThisTick = (offhand != null && offhand.shouldDeferForEat())
-                || (mc.player.isUsingItem()
-                && mc.player.getUsedItemHand() == InteractionHand.MAIN_HAND);
-        currentServerTick = serverTick();
-
-        lastDelayedDestroyBlockPos = hasDelayedDestroy() ? delayedDestroyBlock.blockPos : null;
-
-        if (delayedDestroyBlock != null && !inBreakRange(delayedDestroyBlock.blockPos)) {
-            delayedDestroyBlock.cancelBreaking();
-            delayedDestroyBlock = null;
+        for (Direction.Axis axis : Direction.Axis.values()) {
+            double d = axis.choose(dir.x, dir.y, dir.z);
+            double o = axis.choose(eye.x, eye.y, eye.z);
+            double min = axis.choose(box.minX, box.minY, box.minZ);
+            double max = axis.choose(box.maxX, box.maxY, box.maxZ);
+            if (Math.abs(d) < 1.0E-7) {
+                if (o < min || o > max) return null;
+                continue;
+            }
+            double t1 = (min - o) / d;
+            double t2 = (max - o) / d;
+            double near = Math.min(t1, t2);
+            double far = Math.max(t1, t2);
+            if (near > tEnter) tEnter = near;
+            if (far < tExit) {
+                tExit = far;
+                exitFace = Direction.fromAxisAndDirection(axis,
+                        d > 0 ? Direction.AxisDirection.POSITIVE : Direction.AxisDirection.NEGATIVE);
+            }
         }
-        if (rebreakBlock != null && !inBreakRange(rebreakBlock.blockPos)) {
-            rebreakBlock.cancelBreaking();
-            rebreakBlock = null;
+        if (exitFace == null || tEnter > tExit || tExit <= 0) return null;
+
+        // reject exits that hug the border of the face, those are corner grazes
+        Vec3 exit = eye.add(dir.scale(tExit));
+        for (Direction.Axis axis : Direction.Axis.values()) {
+            if (axis == exitFace.getAxis()) continue;
+            double p = axis.choose(exit.x, exit.y, exit.z) - axis.choose(target.getX(), target.getY(), target.getZ());
+            if (p < BREAK_AHEAD_EDGE || p > 1 - BREAK_AHEAD_EDGE) return null;
         }
 
-        if (hasDelayedDestroy() && (mc.level.getBlockState(delayedDestroyBlock.blockPos).isAir()
-                || !canBreak(delayedDestroyBlock.blockPos))) {
-            delayedDestroyBlock = null;
-        }
+        BlockPos ahead = target.relative(exitFace);
+        if (!inMineRange(ahead)) return null;
+        BlockState state = mc.level.getBlockState(ahead);
+        if (state.isAir() || !InteractionUtil.canBreak(ahead, state)) return null;
+        return ahead;
+    }
 
-        if (rebreakBlock != null && (mc.level.getBlockState(rebreakBlock.blockPos).isAir()
-                || !canBreak(rebreakBlock.blockPos))) {
-            rebreakBlock.beenAir = true;
-        }
-
-        if (hasRebreakBlock() && rebreakBlock.timesSendBreakPacket > singleBreakFailTicks.getValue()
-                && !canRebreakRebreakBlock()) {
-            if (debugLog.getValue()) logFail("rebreak-giveup", rebreakBlock);
-            rebreakBlock.cancelBreaking();
-            rebreakBlock = null;
-        }
-
-        if (swing.getValue() && (hasDelayedDestroy() || rebreakBlock != null)) {
-            mc.player.swing(InteractionHand.MAIN_HAND);
-            if (debugLog.getValue()) {
-                Homovore.LOGGER.info("[SpeedMine] swing (live dig: rebreak={} delayed={})",
-                        rebreakBlock != null, hasDelayedDestroy());
+    private void startMine(BlockPos target, Direction dir) {
+        if (pos != null && started && !finished) {
+            if (!doubleBreak.getValue() || secondaryPos != null || !demote()) {
+                abortBreak();
             }
         }
 
-        tryFinalizeRebreak();
-        sustainDelayedDestroy();
+        pos = target.immutable();
+        direction = dir;
+        ticks = 0;
+        progress = 0;
+        started = false;
+        finished = false;
 
-        if (hasDelayedDestroy() && delayedDestroyBlock.ticksHeldPickaxe > singleBreakFailTicks.getValue()) {
-            if (inBreakRange(delayedDestroyBlock.blockPos)) {
-                delayedDestroyBlock.failRestarts++;
-                if (debugLog.getValue()) logFail("delayed-restart", delayedDestroyBlock);
-                delayedDestroyBlock.startBreaking(true);
-            } else {
-                delayedDestroyBlock.cancelBreaking();
-                delayedDestroyBlock = null;
-            }
-        }
-
-        releaseMineSwap();
+        if (stopCooldown == 0 && canBegin()) begin();
     }
 
-    private record Diag(long tick, long nanos, String desc) {}
-    private static final int DIAG_CAP = 48;
-    private final java.util.ArrayDeque<Diag> diag = new java.util.ArrayDeque<>();
-    private volatile long diagTick;
-
-    private void diagRecord(String desc) {
-        synchronized (diag) {
-            diag.addLast(new Diag(diagTick, System.nanoTime(), desc));
-            while (diag.size() > DIAG_CAP) diag.removeFirst();
-        }
+    private boolean canBegin() {
+        long delay = System.currentTimeMillis() - lastStopMs;
+        if (delay >= 275) return true; // grim decays the balance instead
+        double cost = (300 - delay) * (decoy.getValue() ? 2 : 1);
+        return delayBalance + cost <= 900;
     }
 
-    @Subscribe
-    private void onDiagSend(PacketEvent.Send event) {
-        if (!debugLog.getValue()) return;
-        var p = event.getPacket();
-        String desc;
-        if (p instanceof ServerboundSetCarriedItemPacket s) {
-            desc = "SLOT-> " + s.getSlot();
-        } else if (p instanceof ServerboundPlayerActionPacket a) {
-            desc = a.getAction() + " " + a.getPos().toShortString() + " seq=" + a.getSequence();
-        } else if (p instanceof ServerboundMovePlayerPacket m) {
-            desc = "MOVE " + p.getClass().getSimpleName().replace("ServerboundMovePlayerPacket$", "")
-                    + " onGround=" + m.isOnGround();
-        } else {
-            return;
+    private void trackStarts(int starts) {
+        long delay = System.currentTimeMillis() - lastStopMs;
+        for (int i = 0; i < starts; i++) {
+            if (delay >= 275) delayBalance *= 0.9;
+            else delayBalance += 300 - delay;
         }
-        diagRecord(desc);
+        delayBalance = Mth.clamp(delayBalance, -1000, 1000);
     }
 
-    @Subscribe
-    private void onDiagReceive(PacketEvent.Receive event) {
-        if (!debugLog.getValue()) return;
-        if (!(event.getPacket() instanceof ClientboundPlayerPositionPacket pos)) return;
-        long now = System.nanoTime();
-        StringBuilder sb = new StringBuilder("[SpeedMine][SETBACK] server teleport id=" + pos.id()
-                + " relatives=" + pos.relatives().size() + " toPos=" + pos.change().position()
-                + " (last " + DIAG_CAP + " sent packets, newest last):");
-        synchronized (diag) {
-            for (Diag d : diag) {
-                sb.append(String.format("%n   t%d  -%.1fms  %s", d.tick(), (now - d.nanos()) / 1e6, d.desc()));
-            }
-        }
-        Homovore.LOGGER.info(sb.toString());
+    @Override
+    public boolean isAvailable() {
+        return isEnabled() && !nullCheck() && !mc.player.isCreative() && !mc.player.isSpectator();
     }
 
-    private void releaseMineSwap() {
-        if (heldPickaxeThisTick) {
-            mineSwapIdleTicks = 0;
-            return;
+    @Override
+    public boolean requestBreak(BlockPos target) {
+        if (!isAvailable()) return false;
+        if (isMining(target)) return true;
+        if (!inMineRange(target)) return false;
+        BlockState state = mc.level.getBlockState(target);
+        if (state.isAir() || !InteractionUtil.canBreak(target, state)) return false;
+        if (pos != null && !finished) {
+            if (!started) return false;
+            if (!doubleBreak.getValue() || secondaryPos != null) return false;
         }
-        if (mineSwapHandle == null) return;
-        if (++mineSwapIdleTicks <= swapHoldGraceTicks.getValue()) return;
-        if (!Homovore.swapManager.holdsActive(mineSwapHandle)) {
-            Homovore.swapManager.release(mineSwapHandle);
-            mineSwapHandle = null;
-            mineSwapIdleTicks = 0;
-            return;
-        }
-        if (InventoryUtil.selected() != mineSwapHandle.originalSlot) {
-            InventoryUtil.swap(mineSwapHandle.originalSlot);
-        }
-        Homovore.swapManager.release(mineSwapHandle);
-        mineSwapHandle = null;
-        mineSwapIdleTicks = 0;
-    }
-
-    private boolean tryFinalizeRebreak() {
-        if (rebreakBlock == null) return false;
-
-        if (rebreakHoldTicks > 0 && rebreakBlock.blockPos.equals(rebreakHoldPos)) return false;
-
-        if (!rebreakBlock.isReady()) return false;
-
-        if (!inBreakRange(rebreakBlock.blockPos)) {
-            rebreakBlock = null;
-            return false;
-        }
-
-        if (sendFinishMine(rebreakBlock, true)) {
-            if (rebreakSetBroken.getValue() && canRebreakRebreakBlock()) {
-                mc.level.setBlockAndUpdate(
-                        rebreakBlock.blockPos,
-                        Blocks.AIR.defaultBlockState()
-                );
-            }
-            return true;
-        }
-
-        return false;
-    }
-
-    private void sustainDelayedDestroy() {
-        if (!hasDelayedDestroy()) return;
-        if (delayedDestroyBlock.ticksHeldPickaxe > singleBreakFailTicks.getValue()) return;
-        if (!delayedDestroyBlock.isReady()) return;
-
-        BlockState state = mc.level.getBlockState(delayedDestroyBlock.blockPos);
-        if (state.isAir()) return;
-
-        if (holdPickaxe(state)) {
-            delayedDestroyBlock.ticksHeldPickaxe++;
-        }
-    }
-
-    private boolean holdPickaxe(BlockState state) {
-        Result pickaxe = bestPickaxeResult(state);
-
-        if (!pickaxe.found() || pickaxe.holding()) {
-            if (pickaxe.holding() && mineSwapHandle != null) heldPickaxeThisTick = true;
-            return true;
-        }
-
-        if (usingMainhand()) return false;
-
-        if (!ensureMineSwap()) return false;
-        if (InventoryUtil.selected() != pickaxe.slot()) InventoryUtil.swap(pickaxe);
-        heldPickaxeThisTick = true;
+        startMine(target, validFace(target));
         return true;
     }
 
-    private boolean sendFinishMine(SilentMineBlock data, boolean notifyFinish) {
+    @Override
+    public boolean isMining(BlockPos target) {
+        return target.equals(pos) || target.equals(secondaryPos);
+    }
 
-        if (brokeThisTick) return false;
+    @Override
+    public BlockPos getRebreakPos() {
+        return finished && rebreak.getValue() ? pos : null;
+    }
 
-        BlockState state = mc.level.getBlockState(data.blockPos);
+    @Override
+    public boolean hasFreePrimary() {
+        return pos == null || finished;
+    }
 
-        if (!data.beenAir && state.isAir()) return false;
+    @Override
+    public boolean hasFreeSecondary() {
+        return doubleBreak.getValue() && secondaryPos == null;
+    }
 
-        Runnable burst = () -> {
-            if (notifyFinish) fireFinish(data.blockPos);
+    @Override
+    public boolean inMineRange(BlockPos target) {
+        return mc.player.getEyePosition().distanceTo(Vec3.atCenterOf(target)) <= range.getValue();
+    }
 
-            data.tryBreak();
-            data.timesSendBreakPacket++;
-        };
+    /** The primary mine target, finished or not. */
+    public BlockPos getPrimaryPos() {
+        return pos;
+    }
 
-        boolean shipped;
-        String path;
-        if (state.isAir()) {
+    /** The secondary (double break) target, or null. */
+    public BlockPos getSecondaryPos() {
+        return secondaryPos;
+    }
 
-            if (usingMainhand()) return false;
+    /**
+     * Suppresses the rebreak of {@code target} for {@code ticks} ticks, so a module can drop
+     * something into the hole (AutoMine's GlassPush) before we take the block back out.
+     */
+    public void holdRebreak(BlockPos target, int ticks) {
+        rebreakHoldPos = target != null ? target.immutable() : null;
+        rebreakHoldTicks = target != null ? ticks : 0;
+    }
 
-            burst.run();
-            shipped = true;
-            path = "in-hand(air)";
-        } else {
-
-            shipped = withPickaxe(state, burst, data.beenAir);
-            path = data.beenAir ? "silent-rebreak" : "visible-fresh";
+    public void collectMiningPositions(Set<BlockPos> out, double minProgress) {
+        if (pos != null && started && (finished || progress >= minProgress)) out.add(pos);
+        if (secondaryPos != null && !nullCheck()) {
+            BlockState state = mc.level.getBlockState(secondaryPos);
+            if (!state.isAir()) {
+                double delta = InteractionUtil.getBreakDelta(
+                        mc.player.getInventory().getItem(bestSlot(state, secondaryPos)), state, secondaryPos);
+                if (delta > 0 && secondaryTicks * delta >= minProgress) out.add(secondaryPos);
+            }
         }
-        if (shipped) brokeThisTick = true;
+    }
 
-        if (debugLog.getValue()) {
-            Homovore.LOGGER.info(
-                    "[SpeedMine] finalize {} pos={} beenAir={} sends={} prog={} swap={} shipped={}",
-                    path, data.blockPos, data.beenAir, data.timesSendBreakPacket,
-                    String.format("%.2f", data.getBreakProgress()), !state.isAir() && !bestPickaxeResult(state).holding(),
-                    shipped);
+    private boolean demote() {
+        BlockState state = mc.level.getBlockState(pos);
+        if (state.isAir()) return false;
+        if (!stopBreak(bestSlot(state, pos), false)) {
+            sendAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, validFace(pos));
         }
-        return shipped;
+        secondaryPos = pos;
+        secondaryTicks = ticks;
+        secondaryHolding = false;
+        secondaryProgress = Math.min(progress, 1);
+        return true;
     }
 
-    public boolean hasDelayedDestroy() {
-        return delayedDestroyBlock != null;
-    }
-
-    public boolean hasRebreakBlock() {
-        return rebreakBlock != null && !rebreakBlock.beenAir;
-    }
-
-    public boolean canRebreakRebreakBlock() {
-        return rebreakBlock != null && rebreakBlock.beenAir;
-    }
-
-    public BlockPos getRebreakBlockPos() {
-        return rebreakBlock != null ? rebreakBlock.blockPos : null;
-    }
-
-    public void holdRebreak(BlockPos pos, int ticks) {
-        rebreakHoldPos = pos != null ? pos.immutable() : null;
-        rebreakHoldTicks = pos != null ? ticks : 0;
-    }
-
-    public BlockPos getDelayedDestroyBlockPos() {
-        return delayedDestroyBlock != null ? delayedDestroyBlock.blockPos : null;
-    }
-
-    public BlockPos getLastDelayedDestroyBlockPos() {
-        return lastDelayedDestroyBlockPos;
-    }
-
-    public boolean inBreakRange(BlockPos pos) {
-        if (mc.player == null || pos == null) return false;
-        double r = BREAK_RANGE;
-        Vec3 eye = mc.player.getEyePosition();
-        double cx = Mth.clamp(eye.x, pos.getX(), pos.getX() + 1.0);
-        double cy = Mth.clamp(eye.y, pos.getY(), pos.getY() + 1.0);
-        double cz = Mth.clamp(eye.z, pos.getZ(), pos.getZ() + 1.0);
-        double dx = eye.x - cx, dy = eye.y - cy, dz = eye.z - cz;
-        return dx * dx + dy * dy + dz * dz <= r * r;
-    }
-
-    public void collectMiningPositions(java.util.Set<BlockPos> out, double minProgress) {
-        double tick = currentServerTick;
-        if (rebreakBlock != null && rebreakBlock.getBreakProgress(tick) >= minProgress) out.add(rebreakBlock.blockPos);
-        if (delayedDestroyBlock != null && delayedDestroyBlock.getBreakProgress(tick) >= minProgress) out.add(delayedDestroyBlock.blockPos);
+    private void begin() {
+        started = true;
+        trackStarts(decoy.getValue() ? 2 : 1);
+        if (faceMargin(direction, targetBox(pos)) <= 0) {
+            direction = validFace(pos);
+        }
+        sendAction(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, pos, direction);
+        if (decoy.getValue()) {
+            BlockPos decoyPos = pos.below(DECOY_Y_OFFSET);
+            sendAction(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, decoyPos, validFace(decoyPos));
+        }
+        if (swing.getValue()) {
+            mc.getConnection().send(new ServerboundSwingPacket(InteractionHand.MAIN_HAND));
+        }
     }
 
     @Subscribe
-    public void onRender3D(Render3DEvent event) {
-        if (nullCheck() || !render.getValue()) return;
-        if (rebreakBlock != null)        drawBlock(event, rebreakBlock, true);
-        if (delayedDestroyBlock != null) drawBlock(event, delayedDestroyBlock, false);
-    }
+    private void onTick(PreTickEvent event) {
+        if (nullCheck()) return;
 
-    private void drawBlock(Render3DEvent event, SilentMineBlock data, boolean isPrimary) {
-        double prog = data.getBreakProgress(renderTick(event.getDelta()));
+        if (stopCooldown > 0) stopCooldown--;
+        if (rebreakHoldTicks > 0) rebreakHoldTicks--;
 
-        Color side = isPrimary ? primaryColor.getValue() : sideColor.getValue();
-        Color line = lineColor.getValue();
-        float lw = lineWidth.getValue();
+        tickSecondary();
 
-        boolean isInstantRebreak = isPrimary && data.beenAir && prog >= 0.7;
-        if (isInstantRebreak) {
-            RenderUtil.drawBoxFilled(event.getMatrix(), data.blockPos, side);
-            RenderUtil.drawBox(event.getMatrix(), data.blockPos, line, lw);
+        if (pos == null) return;
+
+        if (mc.player.getEyePosition().distanceTo(Vec3.atCenterOf(pos)) > range.getValue()) {
+            if (started && !finished) abortBreak();
+            clearMine();
             return;
         }
 
-        float t = (float) Math.min(1.0, isPrimary ? prog / 0.7 : prog);
-        double cx = data.blockPos.getX() + 0.5;
-        double cy = data.blockPos.getY() + 0.5;
-        double cz = data.blockPos.getZ() + 0.5;
+        BlockState state = mc.level.getBlockState(pos);
+
+        if (!started) {
+            if (state.isAir() || !InteractionUtil.canBreak(pos, state)) {
+                clearMine();
+                return;
+            }
+            if (stopCooldown > 0 || !canBegin()) return;
+            direction = validFace(pos);
+            begin();
+            return;
+        }
+
+        if (!finished) {
+            if (state.isAir()) {
+                clearMine();
+                return;
+            }
+
+            int slot = bestSlot(state, pos);
+            double delta = InteractionUtil.getBreakDelta(mc.player.getInventory().getItem(slot), state, pos);
+            if (delta <= 0) {
+                abortBreak();
+                clearMine();
+                return;
+            }
+
+            ticks++;
+            progress = Math.max(ticks - fudgeTicks.getValue(), 0) * delta;
+            if (progress >= threshold.getValue()) {
+                finished = stopBreak(slot);
+                if (finished) fireFinish(pos);
+            }
+            return;
+        }
+
+        if (!rebreak.getValue()) {
+            clearMine();
+            return;
+        }
+        if (state.isAir()) return;
+        if (rebreakHoldTicks > 0 && pos.equals(rebreakHoldPos)) return;
+        stopBreak(bestSlot(state, pos));
+    }
+
+    private void tickSecondary() {
+        if (secondaryPos == null) return;
+
+        BlockState state = mc.level.getBlockState(secondaryPos);
+        if (state.isAir()) {
+            fireFinish(secondaryPos);
+            clearSecondary();
+            return;
+        }
+
+        secondaryTicks++;
+        int slot = bestSlot(state, secondaryPos);
+        double delta = InteractionUtil.getBreakDelta(mc.player.getInventory().getItem(slot), state, secondaryPos);
+        if (delta <= 0) {
+            clearSecondary();
+            return;
+        }
+
+        int expected = Mth.ceil(1.0 / delta) - 1;
+        secondaryProgress = Math.min(secondaryTicks * delta, 1);
+
+        if (secondaryTicks > expected + SECONDARY_TIMEOUT) {
+            clearSecondary();
+            return;
+        }
+
+        if (secondaryTicks >= expected - 1 && !secondaryHolding) {
+            Result result = new Result(slot, mc.player.getInventory().getItem(slot), ResultType.HOTBAR);
+            if (!result.holding() && !Homovore.swapManager.isLatched() && Homovore.swapManager.latch(result)) {
+                secondaryHolding = true;
+            }
+        }
+    }
+
+    private void clearSecondary() {
+        if (secondaryHolding) Homovore.swapManager.release();
+        secondaryPos = null;
+        secondaryTicks = 0;
+        secondaryHolding = false;
+        secondaryProgress = 0;
+    }
+
+    @Subscribe
+    private void onRender(Render3DEvent event) {
+        if (nullCheck() || !render.getValue()) return;
+        if (pos != null && started) drawBlock(event, pos, primaryColor.getValue(),
+                finished ? 1 : Math.min(progress / threshold.getValue(), 1));
+        if (secondaryPos != null) drawBlock(event, secondaryPos, sideColor.getValue(), secondaryProgress);
+    }
+
+    private void drawBlock(Render3DEvent event, BlockPos target, Color side, double progress) {
+        if (mc.level.getBlockState(target).isAir()) return;
+
+        float t = (float) Mth.clamp(progress, 0, 1);
+        double cx = target.getX() + 0.5;
+        double cy = target.getY() + 0.5;
+        double cz = target.getZ() + 0.5;
         double half = 0.5 * t;
         AABB box = new AABB(cx - half, cy - half, cz - half, cx + half, cy + half, cz + half);
         RenderUtil.drawBoxFilled(event.getMatrix(), box, side);
-        RenderUtil.drawBox(event.getMatrix(), box, line, lw);
+        RenderUtil.drawBox(event.getMatrix(), box, lineColor.getValue(), lineWidth.getValue());
     }
 
-    private boolean canBreak(BlockPos pos) {
-        BlockState s = mc.level.getBlockState(pos);
-        return !s.isAir() && s.getDestroySpeed(mc.level, pos) >= 0;
+    private boolean stopBreak(int slot) {
+        return stopBreak(slot, true);
     }
 
-    private void sendAction(ServerboundPlayerActionPacket.Action action, BlockPos pos, Direction dir) {
-        if (mc.level == null) return;
-        try (var handler = ((ClientLevelAccessor) mc.level)
-                .homovore$getBlockStatePredictionHandler()
-                .startPredicting()) {
-            mc.getConnection().send(new ServerboundPlayerActionPacket(
-                    action, pos, dir, handler.currentSequence()
-            ));
-        }
-    }
+    private boolean stopBreak(int slot, boolean cooldown) {
+        // A SILENT swap would break an active latch (SwordGap eating, or our own secondary hold) —
+        // wait it out instead; the caller just retries next tick.
+        if (Homovore.swapManager.isLatched() && (pauseOnEat.getValue() || secondaryHolding)) return false;
 
-    private Result bestPickaxeResult(BlockState state) {
-        int best = -1;
-        float bestSpeed = 1.0f;
-        for (int i = 0; i < 9; i++) {
-            ItemStack item = mc.player.getInventory().getItem(i);
-            if (item.isEmpty()) continue;
-            float speed = item.getDestroySpeed(state);
-            if (speed > 1.0f) {
-                int eff = EnchantmentUtil.getLevel(Enchantments.EFFICIENCY, item);
-                if (eff > 0) speed += eff * eff + 1;
+        ItemStack stack = mc.player.getInventory().getItem(slot);
+        return Homovore.swapManager.withSwap(new Result(slot, stack, ResultType.HOTBAR), SwapMode.SILENT,
+                SwapPriority.MINING, () -> {
+            if (cooldown) stopCooldown = breakDelay.getValue();
+            sendAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, pos, validFace(pos));
+            if (swing.getValue()) {
+                mc.getConnection().send(new ServerboundSwingPacket(InteractionHand.MAIN_HAND));
             }
-            if (speed > bestSpeed) {
-                bestSpeed = speed;
-                best = i;
-            }
-        }
-        if (best == -1) return new Result(-1, ItemStack.EMPTY, ResultType.NONE);
-        return new Result(best, mc.player.getInventory().getItem(best), ResultType.HOTBAR);
+        });
     }
 
-    private int bestToolSlot(BlockState state) {
-        int best = -1;
-        float bestSpeed = 1.0f;
-        for (int i = 0; i < 9; i++) {
-            ItemStack item = mc.player.getInventory().getItem(i);
-            float speed = item.getDestroySpeed(state);
-            if (speed > 1.0f) {
-                int eff = EnchantmentUtil.getLevel(Enchantments.EFFICIENCY, item);
-                if (eff > 0) speed += eff * eff + 1;
-            }
-            if (speed > bestSpeed) {
-                bestSpeed = speed;
-                best = i;
+    private void abortBreak() {
+        sendAction(ServerboundPlayerActionPacket.Action.ABORT_DESTROY_BLOCK, pos, Direction.DOWN);
+    }
+
+    private Direction validFace(BlockPos target) {
+        AABB box = targetBox(target);
+
+        Direction best = Direction.UP;
+        double bestMargin = -Double.MAX_VALUE;
+        for (Direction dir : Direction.values()) {
+            double margin = faceMargin(dir, box);
+            if (margin > bestMargin) {
+                bestMargin = margin;
+                best = dir;
             }
         }
         return best;
     }
 
-    private ItemStack bestToolStack(BlockState state) {
-        int slot = bestToolSlot(state);
-        if (slot == -1) slot = mc.player.getInventory().getSelectedSlot();
-        return mc.player.getInventory().getItem(slot);
+    private double faceMargin(Direction dir, AABB box) {
+        Vec3 now = mc.player.position();
+        Vec3 prev = new Vec3(mc.player.xo, mc.player.yo, mc.player.zo);
+        return Math.min(feetMargin(dir, box, now), feetMargin(dir, box, prev));
     }
 
-    private float calcDelta(ItemStack item, BlockPos pos, BlockState state, boolean onGround) {
-        float speed = item.getDestroySpeed(state);
-        if (speed > 1.0f) {
-            int eff = EnchantmentUtil.getLevel(Enchantments.EFFICIENCY, item);
-            if (eff > 0) speed += eff * eff + 1;
-        }
-        if (MobEffectUtil.hasDigSpeed(mc.player)) {
-            speed *= 1.0f + (MobEffectUtil.getDigSpeedAmplification(mc.player) + 1) * 0.2f;
-        }
-        if (mc.player.hasEffect(MobEffects.MINING_FATIGUE)) {
-            int amp = mc.player.getEffect(MobEffects.MINING_FATIGUE).getAmplifier();
-            float g = switch (amp) {
-                case 0 -> 0.3f;
-                case 1 -> 0.09f;
-                case 2 -> 0.0027f;
-                default -> 8.1e-4f;
-            };
-            speed *= g;
-        }
-
-        if (mc.player.isEyeInFluid(FluidTags.WATER)
-                && !EnchantmentUtil.has(Enchantments.AQUA_AFFINITY, EquipmentSlot.HEAD)) {
-            speed /= 5.0f;
-        }
-        if (!onGround) speed /= 5.0f;
-        float hardness = state.getDestroySpeed(mc.level, pos);
-        if (hardness < 0) return 0f;
-        boolean correct = !state.requiresCorrectToolForDrops() || item.isCorrectToolForDrops(state);
-        return speed / hardness / (correct ? 30f : 100f);
+    private double feetMargin(Direction dir, AABB box, Vec3 feet) {
+        return switch (dir) {
+            case UP -> feet.y + GRIM_MAX_EYE - box.maxY;
+            case DOWN -> box.minY - (feet.y + GRIM_MIN_EYE);
+            case EAST -> feet.x - box.maxX;
+            case WEST -> box.minX - feet.x;
+            case SOUTH -> feet.z - box.maxZ;
+            case NORTH -> box.minZ - feet.z;
+        };
     }
 
-    private boolean serverKnownOnGround() {
-        return ((EntityRotationAccessor) mc.player).homovore$getLastOnGround();
+    private AABB targetBox(BlockPos target) {
+        VoxelShape shape = mc.level.getBlockState(target).getShape(mc.level, target);
+        return shape.isEmpty() ? new AABB(target) : shape.bounds().move(target);
     }
 
-    private boolean willBeOnGround() {
-        AABB bb = mc.player.getBoundingBox();
-        double feetY = bb.minY;
-        AABB ground = new AABB(bb.minX, feetY - 0.2, bb.minZ, bb.maxX, feetY, bb.maxZ);
-        double velReach = Math.abs(mc.player.getDeltaMovement().y * 2);
-        for (BlockPos p : BlockPos.betweenClosed(
-                Mth.floor(ground.minX), Mth.floor(ground.minY), Mth.floor(ground.minZ),
-                Mth.floor(ground.maxX), Mth.floor(ground.maxY), Mth.floor(ground.maxZ))) {
-            BlockState s = mc.level.getBlockState(p);
-            if (s.isAir()) continue;
-            double dist = feetY - (p.getY() + 1.0);
-            if (dist >= 0 && dist < velReach) return true;
-        }
-        return false;
-    }
-
-    private class SilentMineBlock {
-        final BlockPos blockPos;
-        final Direction direction;
-        final double priority;
-
-        final boolean isRebreak;
-
-        boolean beenAir;
-        int timesSendBreakPacket;
-        int ticksHeldPickaxe;
-        int failRestarts;
-        double destroyProgressStart;
-
-        boolean isFailing() {
-            if (beenAir) return false;
-            int limit = singleBreakFailTicks.getValue();
-            return failRestarts > 0 || timesSendBreakPacket > limit || ticksHeldPickaxe > limit;
-        }
-
-        SilentMineBlock(BlockPos blockPos, Direction direction, double priority, boolean isRebreak) {
-            this.blockPos = blockPos;
-            this.direction = direction;
-            this.priority = priority;
-            this.isRebreak = isRebreak;
-        }
-
-        SilentMineBlock promoteToDelayedDestroy() {
-            SilentMineBlock promoted = new SilentMineBlock(blockPos, direction, priority, false);
-            promoted.beenAir = beenAir;
-            promoted.ticksHeldPickaxe = ticksHeldPickaxe;
-            promoted.timesSendBreakPacket = 0;
-            promoted.failRestarts = failRestarts;
-            promoted.destroyProgressStart = destroyProgressStart;
-            return promoted;
-        }
-
-        boolean isReady() {
-
-            if (beenAir) return true;
-            if (!canBreak(blockPos)) return false;
-            return getBreakProgress() >= 0.7 || timesSendBreakPacket > 0;
-        }
-
-        double getBreakProgress() {
-            return getBreakProgress(currentServerTick);
-        }
-
-        double getBreakProgress(double gameTick) {
-            BlockState state = mc.level.getBlockState(blockPos);
-            boolean onGround = serverKnownOnGround() || (willBeOnGround() && !isRebreak);
-            double perTick = calcDelta(bestToolStack(state), blockPos, state, onGround);
-            return Math.min(perTick * (gameTick - destroyProgressStart), 1.0);
-        }
-
-        void startBreaking(boolean isDelayedDestroy) {
-            ticksHeldPickaxe = 0;
-            timesSendBreakPacket = 0;
-            destroyProgressStart = currentServerTick;
-
-            if (isDelayedDestroy && canRebreakRebreakBlock()) {
-                rebreakBlock = null;
+    private int bestSlot(BlockState state, BlockPos target) {
+        int best = mc.player.getInventory().getSelectedSlot();
+        double bestDelta = InteractionUtil.getBreakDelta(mc.player.getInventory().getItem(best), state, target);
+        for (int i = 0; i < 9; i++) {
+            double delta = InteractionUtil.getBreakDelta(mc.player.getInventory().getItem(i), state, target);
+            if (delta > bestDelta) {
+                best = i;
+                bestDelta = delta;
             }
-
-            sendAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, blockPos, direction);
-            sendAction(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, blockPos, direction);
-            sendAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, blockPos, direction);
-            sendAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, blockPos, direction);
-            sendAction(ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, blockPos, direction);
-            sendAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, blockPos, direction);
         }
+        return best;
+    }
 
-        void tryBreak() {
-            sendAction(ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, blockPos, direction);
-            sendAction(ServerboundPlayerActionPacket.Action.ABORT_DESTROY_BLOCK, blockPos, direction);
+    private void sendAction(ServerboundPlayerActionPacket.Action action, BlockPos target, Direction face) {
+        if (action == ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK) {
+            lastStopMs = System.currentTimeMillis();
         }
+        mc.getConnection().send(new ServerboundPlayerActionPacket(action, target, face));
+    }
 
-        void cancelBreaking() {
-            sendAction(ServerboundPlayerActionPacket.Action.ABORT_DESTROY_BLOCK, blockPos, direction);
-        }
+    private void clearMine() {
+        pos = null;
+        direction = null;
+        ticks = 0;
+        progress = 0;
+        started = false;
+        finished = false;
     }
 }

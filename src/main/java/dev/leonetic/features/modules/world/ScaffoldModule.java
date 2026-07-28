@@ -11,6 +11,7 @@ import dev.leonetic.util.render.RenderUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.Mth;
 import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
@@ -52,8 +53,8 @@ public class ScaffoldModule extends Module {
         if (nullCheck()) return;
         if (mc.player.isSpectator()) return;
 
-        int slot = findBlockHotbarSlot();
-        if (slot < 0) return;
+        Item block = findHotbarBlock();
+        if (block == null) return;
 
         Vec3 eye = mc.player.getEyePosition();
 
@@ -89,7 +90,7 @@ public class ScaffoldModule extends Module {
         candidates.sort(Comparator.comparingDouble(p -> eye.distanceToSqr(Vec3.atCenterOf(p))));
 
         long now = System.currentTimeMillis();
-        for (BlockPos pos : Homovore.placementManager.placeBatchOffhand(candidates, slot)) {
+        for (BlockPos pos : Homovore.placementManager.placeBatch(candidates, block)) {
             renderMap.put(pos, now);
         }
 
@@ -97,15 +98,16 @@ public class ScaffoldModule extends Module {
         renderMap.entrySet().removeIf(e -> now - e.getValue() > fadeMs);
     }
 
-    private int findBlockHotbarSlot() {
+    /** The block to scaffold with: whatever is held, else the first block item in the hotbar. */
+    private Item findHotbarBlock() {
         int selected = mc.player.getInventory().getSelectedSlot();
-        if (mc.player.getInventory().getItem(selected).getItem() instanceof BlockItem) return selected;
+        if (mc.player.getInventory().getItem(selected).getItem() instanceof BlockItem held) return held;
 
         for (int i = 0; i < 9; i++) {
             ItemStack stack = mc.player.getInventory().getItem(i);
-            if (stack.getItem() instanceof BlockItem) return i;
+            if (stack.getItem() instanceof BlockItem block) return block;
         }
-        return -1;
+        return null;
     }
 
     @Subscribe

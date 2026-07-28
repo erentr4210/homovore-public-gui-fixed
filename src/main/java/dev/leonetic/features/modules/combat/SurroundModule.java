@@ -15,10 +15,10 @@ import dev.leonetic.features.settings.Setting;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.ResultType;
 import dev.leonetic.util.render.RenderUtil;
+import dev.leonetic.util.player.EatUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
-import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.FireworkRocketEntity;
@@ -106,10 +106,9 @@ public class SurroundModule extends Module {
 
         if (!wanted) return;
         if (helpBlockedPoses.contains(pos)) return;
-        int slot = cachedObsSlot;
-        if (slot < 0) return;
+        if (cachedObsSlot < 0) return;
         if (!PlaceUtil.canPlace(pos)) return;
-        if (Homovore.placementManager.enqueue(pos, slot)) {
+        if (Homovore.placementManager.enqueue(pos, Items.OBSIDIAN)) {
             ownedQueued.add(pos);
         }
 
@@ -287,15 +286,14 @@ public class SurroundModule extends Module {
             if (!PlaceUtil.canPlace(pos)) continue;
             fireworkUsePoses.add(pos);
         }
-        if (Homovore.placementManager.placeFireworksAlt(fireworkUsePoses, Direction.DOWN, cachedFireworkSlot)) {
+        if (Homovore.placementManager.useFireworks(fireworkUsePoses, Direction.DOWN)) {
             for (BlockPos pos : fireworkUsePoses) {
                 fireworkDeployedAt.put(pos.immutable(), now);
                 breakCounts.remove(pos);
             }
         }
 
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        if (offhand != null && offhand.shouldDeferForEat()) return;
+        if (EatUtil.shouldDefer()) return;
 
         Vec3 predicted = mc.player.position().add(mc.player.getDeltaMovement().scale(0.5));
         placePoses.sort(Comparator.comparingDouble(p -> Vec3.atCenterOf(p).distanceToSqr(predicted)));
@@ -329,7 +327,7 @@ public class SurroundModule extends Module {
             if (speedMineClaims(pos)) continue;
             if (!PlaceUtil.canPlace(pos)) continue;
 
-            if (Homovore.placementManager.enqueue(pos, obsSlot)) {
+            if (Homovore.placementManager.enqueue(pos, Items.OBSIDIAN)) {
                 ownedQueued.add(pos);
                 renderMap.put(pos, now);
             }
@@ -366,7 +364,7 @@ public class SurroundModule extends Module {
 
     private boolean speedMineClaims(BlockPos pos) {
         SpeedMineModule mine = Homovore.moduleManager.getModuleByClass(SpeedMineModule.class);
-        return mine != null && mine.isEnabled() && mine.alreadyBreaking(pos);
+        return mine != null && mine.isEnabled() && mine.isMining(pos);
     }
 
     private boolean intersectsCrystal(BlockPos pos) {

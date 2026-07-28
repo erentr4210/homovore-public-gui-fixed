@@ -11,7 +11,6 @@ import dev.leonetic.features.modules.world.SpeedMineModule;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.PlacementManager;
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapManager;
 import dev.leonetic.util.DamageSyncTracker;
 import dev.leonetic.util.MathUtil;
 import dev.leonetic.util.PlaceUtil;
@@ -46,6 +45,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.enchantment.Enchantments;
 import dev.leonetic.util.EnchantmentUtil;
+import dev.leonetic.util.player.EatUtil;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
@@ -71,7 +71,6 @@ import java.util.function.BiFunction;
 public class AutoCrystalModule extends Module {
 
     private final Setting<Boolean> place         = bool("Place", true).setPage("General");
-    private final Setting<Boolean> offhandPlace  = bool("OffhandPlace", true).setPage("General");
     private final Setting<Integer> placeDelay    = num("PlaceDelay", 0, 0, 2000).setPage("General");
     private final Setting<Boolean> doBreak       = bool("Break", true).setPage("General");
     private final Setting<Integer> breakDelay    = num("BreakDelay", 0, 0, 2000).setPage("General");
@@ -128,7 +127,6 @@ public class AutoCrystalModule extends Module {
     private final Long2LongOpenHashMap crystalPlaces = new Long2LongOpenHashMap();
 
     private float lastBestDamage    = 0;
-    private SwapManager.SwapHandle pendingSwapHandle = null;
 
     private final java.util.HashMap<String, int[]> diagSendCounts = new java.util.HashMap<>();
     private long diagWindowStart  = 0L;
@@ -177,7 +175,6 @@ public class AutoCrystalModule extends Module {
         lastBestDamage = 0;
         lastCalcMs = 0;
         lastReactorPlaceTick = -1;
-        pendingSwapHandle = null;
         resetDiag();
         Homovore.placementManager.addListener(placementListener);
     }
@@ -185,10 +182,6 @@ public class AutoCrystalModule extends Module {
     @Override
     public void onDisable() {
         Homovore.placementManager.removeListener(placementListener);
-        if (pendingSwapHandle != null) {
-            Homovore.swapManager.release(pendingSwapHandle);
-            pendingSwapHandle = null;
-        }
         crystalPlaces.clear();
         deadIds.clear();
         lastBestDamage = 0;
@@ -373,10 +366,7 @@ public class AutoCrystalModule extends Module {
         if (pkt.getType() != EntityType.END_CRYSTAL) return;
         if (nullCheck() || mc.player.isDeadOrDying()) return;
 
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        if (offhand != null && offhand.shouldDeferForEat()) return;
-        if (mc.player.isUsingItem()
-                && mc.player.getUsedItemHand() == InteractionHand.MAIN_HAND) return;
+        if (EatUtil.shouldDefer()) return;
         AutoSwordModule sword = Homovore.moduleManager.getModuleByClass(AutoSwordModule.class);
         if (sword != null && sword.isEnabled() && sword.isMaceAttackReady()) return;
 
@@ -408,10 +398,7 @@ public class AutoCrystalModule extends Module {
         if (!nowAir) return;
         if (nullCheck() || mc.player.isDeadOrDying()) return;
 
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        if (offhand != null && offhand.shouldDeferForEat()) return;
-        if (mc.player.isUsingItem()
-                && mc.player.getUsedItemHand() == InteractionHand.MAIN_HAND) return;
+        if (EatUtil.shouldDefer()) return;
 
         AutoSwordModule sword = Homovore.moduleManager.getModuleByClass(AutoSwordModule.class);
         if (sword != null && sword.isEnabled() && sword.isMaceAttackReady()) return;
@@ -446,32 +433,11 @@ public class AutoCrystalModule extends Module {
         }
     }
 
-    @Subscribe(priority = 1000)
-    private void onPreTickReleaseStale(PreTickEvent event) {
-        releasePendingSwap();
-    }
-
-    @Subscribe(priority = -100)
-    private void onPreTickRestore(PreTickEvent event) {
-        releasePendingSwap();
-    }
-
-    private void releasePendingSwap() {
-        if (pendingSwapHandle != null) {
-            Homovore.swapManager.release(pendingSwapHandle);
-            pendingSwapHandle = null;
-        }
-    }
-
     @Subscribe
     private void onPreTick(PreTickEvent event) {
         if (nullCheck() || mc.player.isDeadOrDying()) return;
 
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        if (offhand != null && offhand.shouldDeferForEat()) return;
-
-        if (mc.player.isUsingItem()
-                && mc.player.getUsedItemHand() == InteractionHand.MAIN_HAND) return;
+        if (EatUtil.shouldDefer()) return;
 
         AutoSwordModule sword = Homovore.moduleManager.getModuleByClass(AutoSwordModule.class);
         if (sword != null && sword.isEnabled() && sword.isMaceAttackReady()) {
@@ -651,9 +617,8 @@ public class AutoCrystalModule extends Module {
     private boolean doBasePlace(BasePlaceTarget target) {
         Result obs = InventoryUtil.find(Items.OBSIDIAN, InventoryUtil.HOTBAR_SCOPE);
         if (!obs.found() || obs.type() == ResultType.OFFHAND) return false;
-        int slot = obs.slot();
 
-        return Homovore.placementManager.enqueue(target.base, slot);
+        return Homovore.placementManager.enqueue(target.base, Items.OBSIDIAN);
     }
 
     private LivingEntity findClosestBaseTarget(TargetsModule targets) {
@@ -1050,52 +1015,16 @@ public class AutoCrystalModule extends Module {
     }
 
     private void doPlace(PlaceTarget target, boolean trustBase) {
-        Result result = InventoryUtil.find(Items.END_CRYSTAL, EnumSet.of(ResultType.HOTBAR));
-        if (!result.found()) {
+        if (!InventoryUtil.find(Items.END_CRYSTAL, EnumSet.of(ResultType.HOTBAR)).found()) {
             lastBestDamage = 0;
             return;
         }
         lastBestDamage = target.damage;
 
-        BlockPos base        = target.base;
-        int slot             = result.slot();
-
-        if (offhandPlace.getValue()) {
-            diagPlaceAttempt++;
-            boolean sentOffhand = Homovore.placementManager.placeCrystalOffhand(base, slot, trustBase);
-            if (sentOffhand) {
-                diagPlaceSent++;
-                recordPlace(base.above());
-            }
-            return;
-        }
-
-        int originalSlot     = Homovore.swapManager.serverSlot();
-
-        if (pendingSwapHandle != null && pendingSwapHandle.isReleased()) {
-            pendingSwapHandle = null;
-        }
-
-        SwapManager.SwapHandle handle = pendingSwapHandle;
-        boolean acquiredNow = false;
-        if (slot != originalSlot && handle == null) {
-            handle = Homovore.swapManager.acquire("AutoCrystal", 68);
-            if (handle == null) {
-                return;
-            }
-            acquiredNow = true;
-        }
-
         diagPlaceAttempt++;
-        boolean sent = Homovore.placementManager.placeCrystal(base, slot, trustBase);
-
-        if (sent) {
+        if (Homovore.placementManager.placeCrystal(target.base, trustBase)) {
             diagPlaceSent++;
-            recordPlace(base.above());
-            if (handle != null) pendingSwapHandle = handle;
-        } else if (acquiredNow) {
-
-            Homovore.swapManager.release(handle);
+            recordPlace(target.base.above());
         }
     }
 

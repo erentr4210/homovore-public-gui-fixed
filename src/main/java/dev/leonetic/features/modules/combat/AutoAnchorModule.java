@@ -17,10 +17,10 @@ import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
 import dev.leonetic.util.inventory.ResultType;
 import dev.leonetic.util.render.RenderUtil;
+import dev.leonetic.util.player.EatUtil;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
 import net.minecraft.network.protocol.game.ServerboundSwingPacket;
 import net.minecraft.network.protocol.game.ServerboundUseItemOnPacket;
@@ -84,10 +84,7 @@ public class AutoAnchorModule extends Module {
         int sinceLast = mc.player.tickCount - lastBurstTick;
         if (sinceLast >= 0 && sinceLast < delay.getValue()) return;
 
-        if (mc.player.isUsingItem()
-                && mc.player.getUsedItemHand() == InteractionHand.MAIN_HAND) return;
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        if (offhand != null && offhand.shouldDeferForEat()) return;
+        if (EatUtil.shouldDefer()) return;
 
         int anchorSlot = hotbarSlotOf(Items.RESPAWN_ANCHOR);
         int glowSlot   = hotbarSlotOf(Items.GLOWSTONE);
@@ -144,11 +141,9 @@ public class AutoAnchorModule extends Module {
                 currentSlot = anchorSlot;
             }
 
-            conn.send(new ServerboundPlayerActionPacket(
-                    ServerboundPlayerActionPacket.Action.SWAP_ITEM_WITH_OFFHAND, BlockPos.ZERO, Direction.DOWN));
-            sendUseItemOn(conn, placeHit, InteractionHand.OFF_HAND);
-            conn.send(new ServerboundPlayerActionPacket(
-                    ServerboundPlayerActionPacket.Action.SWAP_ITEM_WITH_OFFHAND, BlockPos.ZERO, Direction.DOWN));
+            // The anchor slot is already selected, so place straight from the mainhand — the
+            // offhand round-trip this used to take bought nothing but two extra packets.
+            sendUseItemOn(conn, placeHit);
             Homovore.placementManager.notePlacement(pos);
         }
 

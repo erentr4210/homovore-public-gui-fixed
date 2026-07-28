@@ -77,7 +77,7 @@ public class AutoLogModule extends Module {
                     return;
                 }
 
-                boolean pollOffhand = totemThreshold.getValue() > 1 && isOffhandModuleEnabled();
+                boolean pollOffhand = totemThreshold.getValue() > 1 && isAutoTotemEnabled();
                 Channel channel = pollOffhand ? getChannel() : null;
                 if (channel == null) {
                     disconnect();
@@ -159,9 +159,9 @@ public class AutoLogModule extends Module {
         if (channel != null) channel.close();
     }
 
-    private boolean isOffhandModuleEnabled() {
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        return offhand != null && offhand.isEnabled();
+    private boolean isAutoTotemEnabled() {
+        AutoTotemModule autoTotem = Homovore.moduleManager.getModuleByClass(AutoTotemModule.class);
+        return autoTotem != null && autoTotem.isEnabled();
     }
 
     private boolean isSurvival() {

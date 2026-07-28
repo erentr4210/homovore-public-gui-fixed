@@ -6,7 +6,8 @@ import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
 import net.minecraft.util.Mth;
@@ -19,7 +20,6 @@ public class ElytraFlyModule extends Module {
     public static final String ID = "ElytraFly";
     public static final int PRIORITY = 50;
 
-    private static final int ROCKET_SWAP_PRIORITY = 15;
 
     private final Setting<Boolean> lockPitch = bool("LockPitch", true);
 
@@ -128,8 +128,8 @@ public class ElytraFlyModule extends Module {
 
         ticksSinceRocket = 0;
         refireTicks = InventoryUtil.fireworkRefireTicks(rocket.stack());
-        Homovore.swapManager.submit(new SwapRequest(ID, ROCKET_SWAP_PRIORITY, rocket,
-                () -> mc.gameMode.useItem(mc.player, rocket.hand())));
+        Homovore.swapManager.withSwap(rocket, SwapMode.ALTSILENT, SwapPriority.UTILITY,
+                () -> mc.gameMode.useItem(mc.player, rocket.hand()));
     }
 
     private float headingFromInput(float cameraYaw, float strafe, float fwd) {

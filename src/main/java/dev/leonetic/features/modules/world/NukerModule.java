@@ -10,7 +10,6 @@ import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.util.render.RenderUtil;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
@@ -23,7 +22,6 @@ import java.util.List;
 
 public class NukerModule extends Module {
 
-    private static final double NUKE_PRIORITY = 50.0;
 
     enum Shape { All, Flat }
 
@@ -94,7 +92,7 @@ public class NukerModule extends Module {
                     if (state.isAir()) continue;
                     if (!canBreak(pos, state)) continue;
                     if (!passesFilter(state)) continue;
-                    if (!mine.inBreakRange(pos)) continue;
+                    if (!mine.inMineRange(pos)) continue;
 
                     candidates.add(pos.immutable());
                 }
@@ -104,21 +102,18 @@ public class NukerModule extends Module {
         candidates.sort(Comparator.comparingDouble(p -> new AABB(p).distanceToSqr(eye)));
 
         for (BlockPos pos : candidates) {
-            if (mine.alreadyBreaking(pos)) targetedBlocks.add(pos);
+            if (mine.isMining(pos)) targetedBlocks.add(pos);
         }
 
-        int activeSlots = (mine.getDelayedDestroyBlockPos() != null ? 1 : 0)
-                        + (mine.getRebreakBlockPos() != null ? 1 : 0);
+        int free = (mine.hasFreePrimary() ? 1 : 0) + (mine.hasFreeSecondary() ? 1 : 0);
 
         for (BlockPos pos : candidates) {
-            if (activeSlots >= 2) break;
-            if (mine.alreadyBreaking(pos)) continue;
+            if (free <= 0) break;
+            if (mine.isMining(pos)) continue;
 
-            mine.silentBreakBlock(pos, Direction.UP, NUKE_PRIORITY);
-
-            if (mine.alreadyBreaking(pos)) {
+            if (mine.requestBreak(pos)) {
                 targetedBlocks.add(pos);
-                activeSlots++;
+                free--;
             }
         }
     }

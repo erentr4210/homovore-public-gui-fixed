@@ -6,7 +6,8 @@ import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
 import net.minecraft.world.item.Items;
@@ -16,7 +17,6 @@ import static dev.leonetic.util.inventory.InventoryUtil.FULL_SCOPE;
 
 public class MiddleClickExtraModule extends Module {
 
-    private static final int SWAP_PRIORITY = 1000;
     private static final int ROTATION_PRIORITY = 1000;
 
     private final Setting<Boolean> fireworkInAir = bool("FireworkInAir", true);
@@ -34,8 +34,8 @@ public class MiddleClickExtraModule extends Module {
         if (fireworkInAir.getValue() && mc.player.isFallFlying()) {
             Result firework = InventoryUtil.find(Items.FIREWORK_ROCKET, FULL_SCOPE);
             if (firework.found()) {
-                Homovore.swapManager.submit(new SwapRequest("MiddleClick.firework", SWAP_PRIORITY, firework,
-                        () -> mc.gameMode.useItem(mc.player, firework.hand())));
+                Homovore.swapManager.withSwap(firework, SwapMode.ALTSILENT, SwapPriority.USER_ACTION,
+                        () -> mc.gameMode.useItem(mc.player, firework.hand()));
             }
             return;
         }
@@ -46,7 +46,7 @@ public class MiddleClickExtraModule extends Module {
             Homovore.rotationManager.submit(new RotationRequest("MiddleClick.pearl", ROTATION_PRIORITY,
                     Homovore.rotationManager.getRealYaw(), Homovore.rotationManager.getRealPitch(),
                     RotationRequest.Mode.SILENT));
-            Homovore.swapManager.submit(new SwapRequest("MiddleClick.pearl", SWAP_PRIORITY, pearl,
+            Homovore.swapManager.withSwap(pearl, SwapMode.ALTSILENT, SwapPriority.USER_ACTION,
                     () -> {
 
                         Homovore.rotationManager.setBypassUseSpoof(true);
@@ -55,7 +55,7 @@ public class MiddleClickExtraModule extends Module {
                         } finally {
                             Homovore.rotationManager.setBypassUseSpoof(false);
                         }
-                    }));
+                    });
         }
     }
 }

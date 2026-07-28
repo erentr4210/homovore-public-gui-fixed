@@ -14,6 +14,7 @@ import dev.leonetic.util.PlaceUtil;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.ResultType;
 import dev.leonetic.util.render.RenderUtil;
+import dev.leonetic.util.player.EatUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
@@ -53,7 +54,6 @@ public class PistonCrystalModule extends Module {
 
     private final Setting<Double>  minDamage    = num("MinDamage",    6.0, 0.0, 36.0).setPage("General");
     private final Setting<Integer> delay        = num("Delay",       10, 0, 20).setPage("General");
-    private final Setting<Boolean> offhandPlace = bool("OffhandPlace", true).setPage("General");
     private final Setting<Boolean> autoBase     = bool("AutoBase",   true).setPage("General");
 
     private final Setting<Boolean> damageSync   = bool("DamageSync", false).setPage("General");
@@ -107,8 +107,7 @@ public class PistonCrystalModule extends Module {
     private void onTick(TickEvent event) {
         if (nullCheck() || mc.player.isDeadOrDying()) return;
 
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        if (offhand != null && offhand.shouldDeferForEat()) return;
+        if (EatUtil.shouldDefer()) return;
 
         int fadeTicks = (int)(fadeTime.getValue() * 20);
         int now = mc.player.tickCount;
@@ -164,20 +163,17 @@ public class PistonCrystalModule extends Module {
     }
 
     private void place(Setup setup, int pistonSlot, int redstoneSlot, int crystalSlot) {
-        int obsidianSlot = -1;
-        if (setup.placeBase()) {
-            obsidianSlot = hotbarSlotOf(Items.OBSIDIAN);
-            if (obsidianSlot < 0) return;
-        }
+        if (setup.placeBase() && hotbarSlotOf(Items.OBSIDIAN) < 0) return;
 
         if (setup.placeBase()
-                && !Homovore.placementManager.placeDirect(setup.base(), null, obsidianSlot))
+                && !Homovore.placementManager.placeDirect(setup.base(), null, Items.OBSIDIAN))
             return;
-        if (!Homovore.placementManager.placeDirect(setup.piston(), null, pistonSlot))
+        Item piston = mc.player.getInventory().getItem(pistonSlot).getItem();
+        if (!Homovore.placementManager.placeDirect(setup.piston(), null, piston))
             return;
         if (setup.placeRedstone())
-            Homovore.placementManager.placeDirect(setup.redstone(), null, redstoneSlot);
-        placeCrystal(setup.base(), crystalSlot);
+            Homovore.placementManager.placeDirect(setup.redstone(), null, Items.REDSTONE_BLOCK);
+        Homovore.placementManager.placeCrystal(setup.base(), true);
 
         int tick = mc.player.tickCount;
         if (setup.placeBase())   renderMap.put(setup.base(),    tick);
@@ -191,14 +187,6 @@ public class PistonCrystalModule extends Module {
         active     = setup;
         waitTicks  = 0;
         delayTicks = 0;
-    }
-
-    private void placeCrystal(BlockPos base, int slot) {
-        if (offhandPlace.getValue()) {
-            Homovore.placementManager.placeCrystalOffhand(base, slot, true);
-        } else {
-            Homovore.placementManager.placeCrystal(base, slot, true);
-        }
     }
 
     private void tickActive() {

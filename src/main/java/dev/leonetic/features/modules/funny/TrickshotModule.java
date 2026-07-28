@@ -6,7 +6,8 @@ import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.mixin.client.ClientLevelAccessor;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
@@ -64,11 +65,11 @@ public class TrickshotModule extends Module {
          ));
 
         mc.gameMode.ensureHasSentCarriedItem();
-        Homovore.swapManager.submit(new SwapRequest("Trickshot", 20, pearl, r -> {
+        Homovore.swapManager.withSwap(pearl, SwapMode.ALTSILENT, SwapPriority.UTILITY, () -> {
             try (var handler = ((ClientLevelAccessor) mc.level).homovore$getBlockStatePredictionHandler().startPredicting()) {
-                mc.getConnection().send(new ServerboundUseItemPacket(r.hand(), handler.currentSequence(), yaw, pitch));
+                mc.getConnection().send(new ServerboundUseItemPacket(pearl.hand(), handler.currentSequence(), yaw, pitch));
             }
-        }));
+        });
 
         disable();
     }

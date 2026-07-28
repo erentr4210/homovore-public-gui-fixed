@@ -6,7 +6,8 @@ import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.util.MathUtil;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
@@ -84,7 +85,7 @@ public class MoFuckerModule extends Module {
         Homovore.rotationManager.submit(new RotationRequest(
                 "MoFucker", PRIORITY, angles[0], angles[1], RotationRequest.Mode.SILENT));
 
-        Homovore.swapManager.submit(new SwapRequest(id, 40, item, () -> {
+        Homovore.swapManager.withSwap(item, SwapMode.ALTSILENT, SwapPriority.USER_ACTION, () -> {
             // useItem's bucket raycast uses the client's real rotation, so aim it
             // at the target for the duration of the interaction, then restore.
             float prevYaw   = mc.player.getYRot();
@@ -97,7 +98,7 @@ public class MoFuckerModule extends Module {
                 mc.player.setYRot(prevYaw);
                 mc.player.setXRot(prevPitch);
             }
-        }));
+        });
     }
 
     private Player findTarget() {

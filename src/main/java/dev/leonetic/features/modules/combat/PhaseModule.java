@@ -5,7 +5,8 @@ import dev.leonetic.event.impl.entity.player.TickEvent;
 import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapRequest;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.mixin.client.ClientLevelAccessor;
 import dev.leonetic.util.inventory.InventoryUtil;
 import dev.leonetic.util.inventory.Result;
@@ -58,11 +59,11 @@ public class PhaseModule extends Module {
         Homovore.rotationManager.submit(new RotationRequest("phase", PRIORITY, yaw, pitch, RotationRequest.Mode.SILENT));
 
         mc.gameMode.ensureHasSentCarriedItem();
-        boolean thrown = Homovore.swapManager.submit(new SwapRequest("Phase", 80, pearl, r -> {
+        boolean thrown = Homovore.swapManager.withSwap(pearl, SwapMode.ALTSILENT, SwapPriority.ESCAPE, () -> {
             try (var handler = ((ClientLevelAccessor) mc.level).homovore$getBlockStatePredictionHandler().startPredicting()) {
-                mc.getConnection().send(new ServerboundUseItemPacket(r.hand(), handler.currentSequence(), yaw, pitch));
+                mc.getConnection().send(new ServerboundUseItemPacket(pearl.hand(), handler.currentSequence(), yaw, pitch));
             }
-        }, true));
+        });
 
         if (thrown) disable();
     }

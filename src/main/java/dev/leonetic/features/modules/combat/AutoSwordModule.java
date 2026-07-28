@@ -7,15 +7,18 @@ import dev.leonetic.event.system.Subscribe;
 import dev.leonetic.features.modules.Module;
 import dev.leonetic.features.settings.Setting;
 import dev.leonetic.manager.RotationRequest;
-import dev.leonetic.manager.SwapManager;
+import dev.leonetic.util.inventory.Result;
+import dev.leonetic.util.inventory.ResultType;
+import dev.leonetic.util.inventory.SwapMode;
+import dev.leonetic.util.inventory.SwapPriority;
 import dev.leonetic.util.EnchantmentUtil;
 import dev.leonetic.util.MathUtil;
 import dev.leonetic.features.modules.client.TargetsModule;
 import dev.leonetic.util.render.RenderUtil;
+import dev.leonetic.util.player.EatUtil;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.protocol.game.ServerboundMovePlayerPacket;
-import net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
@@ -114,28 +117,17 @@ public class AutoSwordModule extends Module {
         ItemStack weaponStack = mc.player.getInventory().getItem(weaponSlot);
         boolean doCrit = shouldCrit(weaponStack);
 
-        int originalSlot = Homovore.swapManager.serverSlot();
-        boolean needSwap = weaponSlot != originalSlot;
+        boolean needSwap = weaponSlot != Homovore.swapManager.serverSlot();
 
         if (needSwap && mc.player.isUsingItem()
                 && mc.player.getUsedItemHand() == InteractionHand.MAIN_HAND) {
             return;
         }
 
-        OffhandModule offhand = Homovore.moduleManager.getModuleByClass(OffhandModule.class);
-        if (needSwap && offhand != null && offhand.shouldDeferForEat()) return;
+        if (needSwap && EatUtil.shouldDefer()) return;
 
-        SwapManager.SwapHandle handle = null;
-        if (needSwap) {
-            handle = Homovore.swapManager.acquire("AutoSword", 70);
-            if (handle == null) return;
-        }
-
-        try {
-            if (needSwap) {
-                mc.getConnection().send(new ServerboundSetCarriedItemPacket(weaponSlot));
-            }
-
+        Result weapon = new Result(weaponSlot, weaponStack, ResultType.HOTBAR);
+        boolean swung = Homovore.swapManager.withSwap(weapon, SwapMode.SILENT, SwapPriority.WEAPON, () -> {
             if (doCrit) {
                 double x = mc.player.getX(), y = mc.player.getY(), z = mc.player.getZ();
                 boolean hc = mc.player.horizontalCollision;
@@ -146,13 +138,8 @@ public class AutoSwordModule extends Module {
 
             mc.gameMode.attack(mc.player, currentTarget);
             if (swing.getValue()) mc.player.swing(InteractionHand.MAIN_HAND);
-
-            if (needSwap) {
-                mc.getConnection().send(new ServerboundSetCarriedItemPacket(originalSlot));
-            }
-        } finally {
-            if (handle != null) Homovore.swapManager.release(handle);
-        }
+        });
+        if (!swung) return;
 
         attackCooldownTicks = getBaseCooldownTicks(weaponStack, tps) * delay.getValue().floatValue();
     }
